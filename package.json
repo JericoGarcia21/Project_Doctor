@@ -90,6 +90,7 @@
   "dependencies": {
     "graphology": "^0.25.4",
     "graphology-types": "^0.24.7",
+    "php-parser": "^3.7.0",
     "simple-git": "^3.21.0",
     "sql.js": "^1.8.0"
   }

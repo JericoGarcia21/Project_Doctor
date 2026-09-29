@@ -1,5 +1,6 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import * as ts from 'typescript';
 import { ProjectContext } from './ProjectContext';
 import { ScanResult } from './ScanResult';
 import { FileInfo, ScanStatistics } from './types';
@@ -7,7 +8,11 @@ import { Analyzer } from '../analyzers/Analyzer';
 import { FindingManager } from '../diagnostics/FindingManager';
 import { FrameworkDetector } from '../detectors/FrameworkDetector';
 import { ImportGraph } from '../graph/ImportGraph';
+import { ProjectGraph } from '../graph/ProjectGraph';
+import { NodeType, RelationType, createEdge, createNode } from '../graph/GraphNode';
 import { TypeScriptParser } from '../parsers/TypeScriptParser';
+import { ASTParseResult } from '../parsers/ASTParser';
+import { PHPControllerAction, PHPParser } from '../parsers/PHPParser';
 
 export class ProjectScanner {
   private readonly ignoredDirectories = [
@@ -43,10 +48,12 @@ export class ProjectScanner {
 
   private frameworkDetector: FrameworkDetector;
   private tsParser: TypeScriptParser;
+  private phpParser: PHPParser;
 
   constructor(private analyzers: Analyzer[] = []) {
     this.frameworkDetector = new FrameworkDetector();
     this.tsParser = new TypeScriptParser();
+    this.phpParser = new PHPParser();
   }
 
   async scan(rootPath: string): Promise<ScanResult> {
@@ -72,6 +79,10 @@ export class ProjectScanner {
       // Build import graph for TypeScript/JavaScript files (Phase 2)
       const importGraph = await this.buildImportGraph(context.rootPath, files);
       console.log(`[ProjectScanner] Import graph: ${importGraph.getStatistics().totalFiles} files, ${importGraph.getStatistics().totalImports} imports`);
+
+      // Build relationship graph for Phase 3 symbol-to-symbol analysis
+      const relationshipGraph = await this.buildRelationshipGraph(context.rootPath, files);
+      console.log(`[ProjectScanner] Relationship graph: ${relationshipGraph.getNodeCount()} nodes, ${relationshipGraph.getEdgeCount()} edges`);
       
       // Run analyzers
       for (const analyzer of this.analyzers) {
@@ -95,7 +106,8 @@ export class ProjectScanner {
         context,
         findingManager.getFindings(),
         statistics,
-        scanDuration
+        scanDuration,
+        relationshipGraph
       );
     } catch (error) {
       console.error(`[ProjectScanner] Error during scan:`, error);
@@ -345,5 +357,315 @@ export class ProjectScanner {
     }
 
     return importGraph;
+  }
+
+  private async buildRelationshipGraph(rootPath: string, files: FileInfo[]): Promise<ProjectGraph> {
+    const graph = new ProjectGraph();
+    const sourceFiles = files.filter(f =>
+      f.extension === '.ts' ||
+      f.extension === '.tsx' ||
+      f.extension === '.js' ||
+      f.extension === '.jsx'
+    ).slice(0, 100);
+
+    const parsedFiles: { file: FileInfo; result: ASTParseResult }[] = [];
+    const filesByPath = new Map<string, ASTParseResult>();
+    const symbolsByFile = new Map<string, Map<string, { id: string; type: NodeType; isExported: boolean }>>();
+    const exportedSymbols = new Map<string, string>();
+
+    for (const file of sourceFiles) {
+      try {
+        const content = await fs.readFile(file.path, 'utf-8');
+        const result = await this.tsParser.parseDetailed(content, file.path);
+        parsedFiles.push({ file, result });
+        filesByPath.set(path.resolve(file.path), result);
+      } catch {
+        console.debug(`[ProjectScanner] Skipping relationship analysis for ${file.path}`);
+      }
+    }
+
+    const addSymbol = (filePath: string, name: string, type: NodeType, isExported: boolean): string => {
+      const id = `${filePath}#${name}`;
+      graph.addNode(createNode(id, type, name, { filePath }));
+      const symbols = symbolsByFile.get(filePath) ?? new Map();
+      symbols.set(name, { id, type, isExported });
+      symbolsByFile.set(filePath, symbols);
+      if (isExported) {
+        exportedSymbols.set(`${path.resolve(filePath)}#${name}`, id);
+      }
+      return id;
+    };
+
+    for (const { file, result } of parsedFiles) {
+      const fileNodeId = file.path;
+      graph.addNode(createNode(fileNodeId, NodeType.FILE, path.basename(file.path), { filePath: file.path }));
+
+      for (const fn of result.functions) {
+        addSymbol(file.path, fn.name, NodeType.FUNCTION, fn.isExported);
+      }
+
+      for (const cls of result.classes) {
+        addSymbol(file.path, cls.name, NodeType.CLASS, cls.isExported);
+      }
+
+      for (const iface of result.interfaces) {
+        addSymbol(file.path, iface.name, NodeType.CLASS, iface.isExported);
+      }
+    }
+
+    let pathMappings: Record<string, readonly string[]> = {};
+    let pathBase = rootPath;
+    try {
+      const configPath = path.join(rootPath, 'tsconfig.json');
+      const config = ts.readConfigFile(configPath, ts.sys.readFile);
+      if (!config.error) {
+        const parsedConfig = ts.parseJsonConfigFileContent(config.config, ts.sys, rootPath, undefined, configPath);
+        pathMappings = parsedConfig.options.paths ?? {};
+        pathBase = parsedConfig.options.baseUrl ?? rootPath;
+      }
+    } catch {
+      // Path aliases are optional; relative imports still resolve without tsconfig.
+    }
+
+    const resolveFile = (basePath: string): string | undefined => {
+      const candidates = [
+        basePath,
+        ...['.ts', '.tsx', '.js', '.jsx'].map(extension => `${basePath}${extension}`),
+        ...['.ts', '.tsx', '.js', '.jsx'].map(extension => path.join(basePath, `index${extension}`))
+      ];
+      return candidates.find(candidate => filesByPath.has(path.resolve(candidate)));
+    };
+
+    const resolveModule = (fromFile: string, moduleName: string): string | undefined => {
+      if (moduleName.startsWith('.')) {
+        return resolveFile(path.resolve(path.dirname(fromFile), moduleName));
+      }
+
+      for (const [pattern, targets] of Object.entries(pathMappings)) {
+        const wildcard = pattern.indexOf('*');
+        const prefix = wildcard < 0 ? pattern : pattern.slice(0, wildcard);
+        const suffix = wildcard < 0 ? '' : pattern.slice(wildcard + 1);
+        if (!moduleName.startsWith(prefix) || !moduleName.endsWith(suffix)) {
+          continue;
+        }
+        const matched = moduleName.slice(prefix.length, moduleName.length - suffix.length || undefined);
+        for (const target of targets) {
+          const targetPath = target.replace('*', matched);
+          const resolved = resolveFile(path.resolve(pathBase, targetPath));
+          if (resolved) {
+            return resolved;
+          }
+        }
+      }
+      return undefined;
+    };
+
+    for (let pass = 0; pass <= parsedFiles.length; pass++) {
+      let changed = false;
+      for (const { file, result } of parsedFiles) {
+        for (const exported of result.exports) {
+          if (exported.exportType === 're-export' && exported.exportedNames.includes('*')) {
+            const targetFile = exported.exportedFrom && resolveModule(file.path, exported.exportedFrom);
+            if (!targetFile) {
+              continue;
+            }
+            const targetPrefix = `${path.resolve(targetFile)}#`;
+            for (const [key, symbolId] of exportedSymbols) {
+              if (!key.startsWith(targetPrefix)) {
+                continue;
+              }
+              const exportedName = key.slice(targetPrefix.length);
+              const currentKey = `${path.resolve(file.path)}#${exportedName}`;
+              if (!exportedSymbols.has(currentKey)) {
+                exportedSymbols.set(currentKey, symbolId);
+                changed = true;
+              }
+            }
+            continue;
+          }
+
+          for (const binding of exported.bindings) {
+            const targetFile = exported.exportedFrom && resolveModule(file.path, exported.exportedFrom);
+            const target = targetFile
+              ? exportedSymbols.get(`${path.resolve(targetFile)}#${binding.localName}`)
+              : symbolsByFile.get(file.path)?.get(binding.localName)?.id;
+            if (target) {
+              const key = `${path.resolve(file.path)}#${binding.exportedName}`;
+              if (exportedSymbols.get(key) !== target) {
+                exportedSymbols.set(key, target);
+                changed = true;
+              }
+            }
+          }
+        }
+      }
+      if (!changed) {
+        break;
+      }
+    }
+
+    for (const { file, result } of parsedFiles) {
+      const fileNodeId = file.path;
+      for (const imported of result.imports) {
+        const importedFile = resolveModule(file.path, imported.moduleName);
+        if (importedFile) {
+          graph.addEdge(createEdge(fileNodeId, importedFile, RelationType.IMPORTS, {
+            importType: imported.importType,
+            importedNames: imported.importedNames,
+            sourceLine: imported.sourceLine
+          }));
+        } else if (!imported.moduleName.startsWith('.')) {
+          const dependencyNodeId = `external:${imported.moduleName}`;
+          graph.addNode(createNode(dependencyNodeId, NodeType.FILE, imported.moduleName, { filePath: imported.moduleName }));
+          graph.addEdge(createEdge(fileNodeId, dependencyNodeId, RelationType.IMPORTS, {
+            importType: imported.importType,
+            importedNames: imported.importedNames,
+            sourceLine: imported.sourceLine
+          }));
+        }
+      }
+
+      const resolveTarget = (name: string): string | undefined => {
+        const localTarget = symbolsByFile.get(file.path)?.get(name);
+        if (localTarget) {
+          return localTarget.id;
+        }
+
+        for (const imported of result.imports) {
+          const binding = imported.bindings.find(item => item.localName === name);
+          if (!binding) {
+            continue;
+          }
+
+          const targetFile = resolveModule(file.path, imported.moduleName);
+          if (targetFile) {
+            return exportedSymbols.get(`${path.resolve(targetFile)}#${binding.importedName}`);
+          }
+        }
+        return undefined;
+      };
+
+      for (const relationship of result.relationships) {
+        const source = symbolsByFile.get(file.path)?.get(relationship.source);
+        const targetId = resolveTarget(relationship.target);
+        if (!source || !targetId) {
+          continue;
+        }
+
+        let relationType: RelationType;
+        switch (relationship.type) {
+          case 'calls':
+            relationType = RelationType.CALLS;
+            break;
+          case 'callback':
+            relationType = RelationType.CALLBACK;
+            break;
+          case 'handles':
+            relationType = RelationType.HANDLES;
+            break;
+          case 'decorates':
+            relationType = RelationType.DECORATES;
+            break;
+          case 'uses':
+            relationType = RelationType.USES;
+            break;
+          case 'extends':
+            relationType = RelationType.EXTENDS;
+            break;
+          case 'implements':
+            relationType = RelationType.IMPLEMENTS;
+            break;
+        }
+        graph.addEdge(createEdge(source.id, targetId, relationType, {
+          sourceLine: relationship.sourceLine,
+          relationshipType: relationship.type
+        }));
+      }
+    }
+
+    await this.addLaravelRouteRelationships(rootPath, files, graph);
+    return graph;
+  }
+
+  private async addLaravelRouteRelationships(rootPath: string, files: FileInfo[], graph: ProjectGraph): Promise<void> {
+    const controllerFiles = files.filter(file => {
+      if (file.extension !== '.php') {
+        return false;
+      }
+      const relativePath = path.relative(rootPath, file.path).split(path.sep).join('/').toLowerCase();
+      return relativePath.startsWith('app/http/controllers/');
+    });
+    const routeFiles = files.filter(file => {
+      if (file.extension !== '.php') {
+        return false;
+      }
+      const relativePath = path.relative(rootPath, file.path).split(path.sep).join('/');
+      return /^routes\/(web|api)\.php$/i.test(relativePath);
+    });
+
+    const controllers = new Map<string, { filePath: string; actions: PHPControllerAction[] }>();
+    for (const file of controllerFiles) {
+      try {
+        const content = await fs.readFile(file.path, 'utf-8');
+        for (const action of this.phpParser.parseControllerActions(content, file.path)) {
+          const controller = controllers.get(action.controller) ?? { filePath: file.path, actions: [] };
+          controller.actions.push(action);
+          controllers.set(action.controller, controller);
+        }
+      } catch {
+        console.debug(`[ProjectScanner] Skipping controller analysis for ${file.path}`);
+      }
+    }
+
+    for (const [className, controller] of controllers) {
+      const controllerId = `php-controller:${className}`;
+      graph.addNode(createNode(controllerId, NodeType.CONTROLLER, className.split('\\').pop() ?? className, {
+        filePath: controller.filePath,
+        metadata: { className, actions: controller.actions.map(action => action.action) }
+      }));
+      for (const action of controller.actions) {
+        graph.addNode(createNode(`${controllerId}#action:${action.action}`, NodeType.FUNCTION, action.action, {
+          filePath: controller.filePath,
+          metadata: { controller: className, parameters: action.parameters, sourceLine: action.sourceLine }
+        }));
+      }
+    }
+
+    for (const file of routeFiles) {
+      try {
+        const content = await fs.readFile(file.path, 'utf-8');
+        const routes = this.phpParser.parseLaravelRoutes(content, file.path);
+        graph.addNode(createNode(file.path, NodeType.FILE, path.basename(file.path), { filePath: file.path }));
+
+        for (const route of routes) {
+          const routeId = `${file.path}#route:${route.method}:${route.uri}:${route.sourceLine}`;
+          graph.addNode(createNode(routeId, NodeType.API_ROUTE, `${route.method} ${route.uri}`, {
+            filePath: file.path,
+            metadata: { method: route.method, uri: route.uri, sourceLine: route.sourceLine }
+          }));
+
+          if (route.controller) {
+            const controllerId = `php-controller:${route.controller}`;
+            graph.addNode(createNode(controllerId, NodeType.CONTROLLER, route.controller.split('\\').pop() ?? route.controller, {
+              metadata: { className: route.controller }
+            }));
+            graph.addEdge(createEdge(routeId, controllerId, RelationType.MAPS_TO, {
+              action: route.action,
+              sourceLine: route.sourceLine
+            }));
+
+            if (route.action && controllers.get(route.controller)?.actions.some(action => action.action === route.action)) {
+              const actionId = `${controllerId}#action:${route.action}`;
+              graph.addEdge(createEdge(routeId, actionId, RelationType.HANDLES, {
+                action: route.action,
+                sourceLine: route.sourceLine
+              }));
+            }
+          }
+        }
+      } catch (error) {
+        console.debug(`[ProjectScanner] Skipping Laravel route analysis for ${file.path}`);
+      }
+    }
   }
 }

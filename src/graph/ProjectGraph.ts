@@ -5,7 +5,7 @@ export class ProjectGraph {
   private graph: Graph;
 
   constructor() {
-    this.graph = new Graph();
+    this.graph = new Graph({ multi: true });
   }
 
   addNode(node: GraphNode): void {
@@ -16,7 +16,12 @@ export class ProjectGraph {
 
   addEdge(edge: GraphEdge): void {
     if (this.graph.hasNode(edge.source) && this.graph.hasNode(edge.target)) {
-      if (!this.graph.hasEdge(edge.source, edge.target)) {
+      const hasSameRelationship = this.graph.outEdges(edge.source).some((edgeId) => {
+        const existingEdge = this.graph.getEdgeAttributes(edgeId) as GraphEdge | undefined;
+        return existingEdge?.target === edge.target && existingEdge?.type === edge.type;
+      });
+
+      if (!hasSameRelationship) {
         this.graph.addDirectedEdge(edge.source, edge.target, edge);
       }
     }
@@ -53,9 +58,55 @@ export class ProjectGraph {
     return relationships;
   }
 
-  findPath(_sourceId: string, _targetId: string): string[] | null {
-    // Placeholder - pathfinding will be implemented in Phase 3
-    return null;
+  findPath(sourceId: string, targetId: string): string[] | null {
+    if (!this.graph.hasNode(sourceId) || !this.graph.hasNode(targetId)) {
+      return null;
+    }
+
+    if (sourceId === targetId) {
+      return [sourceId];
+    }
+
+    const queue: string[] = [sourceId];
+    const visited = new Set<string>([sourceId]);
+    const previous = new Map<string, string | null>();
+    previous.set(sourceId, null);
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current) {
+        continue;
+      }
+
+      if (current === targetId) {
+        break;
+      }
+
+      const neighbors = this.graph.outNeighbors(current);
+      for (const neighbor of neighbors) {
+        if (visited.has(neighbor)) {
+          continue;
+        }
+
+        visited.add(neighbor);
+        previous.set(neighbor, current);
+        queue.push(neighbor);
+      }
+    }
+
+    if (!previous.has(targetId)) {
+      return null;
+    }
+
+    const path: string[] = [];
+    let current: string | null = targetId;
+
+    while (current !== null) {
+      path.unshift(current);
+      current = previous.get(current) ?? null;
+    }
+
+    return path;
   }
 
   export(): object {

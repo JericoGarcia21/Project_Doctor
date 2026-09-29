@@ -229,4 +229,48 @@ describe('ASTParser', () => {
       expect(result.hasTypeScript).toBe(true);
     });
   });
+
+  describe('Relationship Detection', () => {
+    it('should track function calls between local functions', () => {
+      const code = `
+        function helper() { return 1; }
+        function app() { return helper(); }
+      `;
+      const result = parser.parse(code, 'test.ts');
+
+      expect(result.relationships).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'calls',
+            source: 'app',
+            target: 'helper'
+          })
+        ])
+      );
+    });
+
+    it('should track inheritance and interface implementation', () => {
+      const code = `
+        class Parent {}
+        interface Runner {}
+        class Child extends Parent implements Runner {}
+      `;
+      const result = parser.parse(code, 'test.ts');
+
+      expect(result.relationships).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'extends',
+            source: 'Child',
+            target: 'Parent'
+          }),
+          expect.objectContaining({
+            type: 'implements',
+            source: 'Child',
+            target: 'Runner'
+          })
+        ])
+      );
+    });
+  });
 });

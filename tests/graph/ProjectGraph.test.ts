@@ -63,6 +63,25 @@ describe('ProjectGraph', () => {
     expect(imports[0].type).toBe(RelationType.IMPORTS);
   });
 
+  it('should keep multiple relationship types between the same nodes', () => {
+    const node1 = createNode('file1', NodeType.FILE, 'index.ts');
+    const node2 = createNode('file2', NodeType.FILE, 'utils.ts');
+
+    graph.addNode(node1);
+    graph.addNode(node2);
+
+    graph.addEdge(createEdge('file1', 'file2', RelationType.IMPORTS));
+    graph.addEdge(createEdge('file1', 'file2', RelationType.CALLS));
+
+    expect(graph.getEdgeCount()).toBe(2);
+
+    const relationships = graph.getRelationships('file1');
+    expect(relationships.map(r => r.type)).toEqual(expect.arrayContaining([
+      RelationType.IMPORTS,
+      RelationType.CALLS
+    ]));
+  });
+
   it('should clear graph', () => {
     graph.addNode(createNode('file1', NodeType.FILE, 'index.ts'));
     
@@ -71,5 +90,20 @@ describe('ProjectGraph', () => {
     graph.clear();
     
     expect(graph.getNodeCount()).toBe(0);
+  });
+
+  it('should find a shortest path between connected nodes', () => {
+    const a = createNode('A', NodeType.FILE, 'A.ts');
+    const b = createNode('B', NodeType.FILE, 'B.ts');
+    const c = createNode('C', NodeType.FILE, 'C.ts');
+
+    graph.addNode(a);
+    graph.addNode(b);
+    graph.addNode(c);
+
+    graph.addEdge(createEdge('A', 'B', RelationType.CALLS));
+    graph.addEdge(createEdge('B', 'C', RelationType.CALLS));
+
+    expect(graph.findPath('A', 'C')).toEqual(['A', 'B', 'C']);
   });
 });

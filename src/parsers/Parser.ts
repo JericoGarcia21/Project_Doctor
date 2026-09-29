@@ -6,11 +6,19 @@ export interface Parser {
   parse(content: string, filePath: string): Promise<ParseResult>;
 }
 
+export interface ParseRelationship {
+  type: 'calls' | 'callback' | 'handles' | 'decorates' | 'uses' | 'extends' | 'implements';
+  source: string;
+  target: string;
+  sourceLine: number;
+}
+
 export interface ParseResult {
   imports: string[];
   exports: string[];
   functions: string[];
   classes: string[];
+  relationships: ParseRelationship[];
   errors: ParseError[];
 }
 
@@ -38,6 +46,7 @@ export abstract class BaseParser implements Parser {
       exports: [],
       functions: [],
       classes: [],
+      relationships: [],
       errors: []
     };
   }

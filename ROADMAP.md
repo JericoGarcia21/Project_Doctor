@@ -227,42 +227,58 @@ This document outlines all planned development phases for the Project Doctor VS 
 
 ## Phase 3 — Code Relationship Analysis
 
-**Status**: 🔜 Not Started  
+**Status**: In Progress  
 **Goal**: Build comprehensive relationship graph between all project components
+
+### Implemented Milestones
+- ✅ **Function call tracking** in TypeScript AST parsing
+- ✅ **Class inheritance and interface implementation tracking**
+- ✅ **Relationship metadata exposed from AST results**
+- ✅ **Cross-file symbol resolution** for relative named imports, including aliased function calls
+- ✅ **Default imports, barrel re-exports, and TypeScript path aliases**
+- ✅ **Class method nodes and `this.method()` call relationships**
+- ✅ **Scan relationship graph exposure** through `ScanResult` and JSON serialization
+- ✅ **Module import edges** included in the scan relationship graph
 
 ### Planned Features
 
 #### Full TypeScript/JavaScript Analysis
-- [ ] **Function Call Tracking**
-  - Map function calls across files
-  - Track method invocations
-  - Identify callback functions
-  - Map event handlers
+- [x] **Function Call Tracking**
+  - [x] Resolve local and cross-file calls through named/default imports, re-exports, and tsconfig paths
+  - [x] Track calls between methods on the same class via `this.method()`
+  - [x] Track named callback arguments and named JSX event-handler references
+  - [ ] Model anonymous inline callback and event-handler functions
 
 - [ ] **Class Relationship Mapping**
   - Track inheritance hierarchies
   - Map interface implementations
   - Identify decorator usage
   - Track mixin patterns
+- [x] **Class Relationship Mapping**
+  - [x] Track inheritance hierarchies
+  - [x] Map interface implementations
+  - [x] Identify class and method decorator usage
+  - [x] Track mixin factory calls in `extends` clauses
 
-- [ ] **Module Relationships**
-  - Build module dependency graph
-  - Identify circular dependencies
-  - Map barrel exports
-  - Track side-effect modules
+- [x] **Module Relationships**
+  - [x] Build module dependency edges for relative imports and tsconfig path aliases
+  - [x] Identify circular dependencies
+  - [x] Resolve named/default barrel re-exports
+  - [x] Track side-effect import edges
 
 #### PHP/Laravel Analysis
 - [ ] **Laravel Route Detection**
-  - Parse routes/web.php
-  - Parse routes/api.php
-  - Extract route definitions
-  - Map route to controller
+  - [x] Parse `routes/web.php` and `routes/api.php`
+  - [x] Extract verb, URI, source line, and common match/resource route declarations
+  - [x] Map imported controller references and actions, including `Controller@action`
+  - [x] Resolve prefix and controller context from chained and array-based route groups
+  - [ ] Handle route group middleware, namespaces, and route-name attributes
 
 - [ ] **Controller Analysis**
-  - Parse controller files
-  - Extract action methods
-  - Map request parameters
-  - Identify middleware usage
+  - [x] Parse controller files under `app/Http/Controllers`
+  - [x] Extract public action methods and parameter names
+  - [x] Link routes to existing controller actions
+  - [ ] Identify middleware usage
 
 - [ ] **Model Analysis**
   - Parse Eloquent models
@@ -845,13 +861,11 @@ This document outlines all planned development phases for the Project Doctor VS 
 ### Advanced Features
 - Real-time collaboration
 - Team analytics
-- Code review assistance
 - Performance profiling integration
 - Container and cloud deployment analysis
 
 ### Enterprise Features
 - Multi-project dashboards
-- Organization-wide metrics
 - Custom rule engines
 - Compliance reporting
 - SSO and authentication
@@ -939,11 +953,12 @@ This roadmap is a living document. As Project Doctor evolves:
 3. Timeline estimates may adjust based on complexity
 4. Some features may move between phases for better flow
 
-**Current Status**: Phase 2 - 100% COMPLETE ✅ 🎉  
-**Next Milestone**: Begin Phase 3 - Code Relationship Analysis
+**Current Status**: Phase 3 - Relationship Mapping started 🔄  
+**Next Milestone**: Expand Phase 3 with cross-file dependency graphing and Laravel mapping
 
 **Recent Achievements** 🎉:
 - ✅ Phase 2 COMPLETE!
+- ✅ Phase 3 initial milestone: function call and class relationship extraction implemented
 - ✅ TypeScript AST parser fully working
 - ✅ Import/export graph builder operational
 - ✅ Framework detector for 6 frameworks

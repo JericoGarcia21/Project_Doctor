@@ -4,6 +4,7 @@ export interface ASTImport {
   moduleName: string;
   importType: 'default' | 'named' | 'namespace' | 'side-effect';
   importedNames: string[];
+  bindings: { importedName: string; localName: string }[];
   isTypeOnly: boolean;
   sourceLine: number;
 }
@@ -11,6 +12,7 @@ export interface ASTImport {
 export interface ASTExport {
   exportType: 'default' | 'named' | 're-export';
   exportedNames: string[];
+  bindings: { exportedName: string; localName: string }[];
   isTypeOnly: boolean;
   sourceLine: number;
   exportedFrom?: string;
@@ -45,12 +47,20 @@ export interface ASTInterface {
   sourceLine: number;
 }
 
+export interface ASTRelationship {
+  type: 'calls' | 'callback' | 'handles' | 'decorates' | 'uses' | 'extends' | 'implements';
+  source: string;
+  target: string;
+  sourceLine: number;
+}
+
 export interface ASTParseResult {
   imports: ASTImport[];
   exports: ASTExport[];
   functions: ASTFunction[];
   classes: ASTClass[];
   interfaces: ASTInterface[];
+  relationships: ASTRelationship[];
   hasJSX: boolean;
   hasTypeScript: boolean;
 }
@@ -66,6 +76,7 @@ export class ASTParser {
       functions: [],
       classes: [],
       interfaces: [],
+      relationships: [],
       hasJSX: false,
       hasTypeScript: filePath.endsWith('.ts') || filePath.endsWith('.tsx')
     };
@@ -87,6 +98,7 @@ export class ASTParser {
 
       // Visit all nodes in the AST
       this.visitNode(sourceFile, result, sourceFile);
+      this.collectFunctionCallRelationships(sourceFile, result);
 
     } catch (error) {
       console.error(`[ASTParser] Error parsing ${filePath}:`, error);
@@ -116,6 +128,7 @@ export class ASTParser {
         result.exports.push({
           exportType: 'default',
           exportedNames: ['default'],
+          bindings: [{ exportedName: 'default', localName: node.name?.text ?? 'default' }],
           isTypeOnly: false,
           sourceLine
         });
@@ -137,6 +150,7 @@ export class ASTParser {
         result.exports.push({
           exportType: 'default',
           exportedNames: ['default'],
+          bindings: [{ exportedName: 'default', localName: node.name?.text ?? 'default' }],
           isTypeOnly: false,
           sourceLine
         });
@@ -168,6 +182,7 @@ export class ASTParser {
         moduleName,
         importType: 'side-effect',
         importedNames: [],
+        bindings: [],
         isTypeOnly: false,
         sourceLine
       });
@@ -182,6 +197,7 @@ export class ASTParser {
         moduleName,
         importType: 'default',
         importedNames: [importClause.name.text],
+        bindings: [{ importedName: 'default', localName: importClause.name.text }],
         isTypeOnly,
         sourceLine
       });
@@ -189,14 +205,17 @@ export class ASTParser {
 
     // Named imports: import { useState, useEffect } from 'react'
     if (importClause.namedBindings) {
-      if (ts.isNamedImports(importClause.namedBindings)) {
-        const importedNames = importClause.namedBindings.elements.map(
-          (element) => element.name.text
-        );
+      const namedBindings = importClause.namedBindings;
+      if (ts.isNamedImports(namedBindings)) {
+        const bindings = namedBindings.elements.map((element) => ({
+          importedName: element.propertyName?.text ?? element.name.text,
+          localName: element.name.text
+        }));
         result.imports.push({
           moduleName,
           importType: 'named',
-          importedNames,
+          importedNames: bindings.map((binding) => binding.localName),
+          bindings,
           isTypeOnly,
           sourceLine
         });
@@ -207,6 +226,7 @@ export class ASTParser {
           moduleName,
           importType: 'namespace',
           importedNames: [importClause.namedBindings.name.text],
+          bindings: [],
           isTypeOnly,
           sourceLine
         });
@@ -224,10 +244,14 @@ export class ASTParser {
         : undefined;
 
       if (node.exportClause && ts.isNamedExports(node.exportClause)) {
-        const exportedNames = node.exportClause.elements.map((element) => element.name.text);
+        const bindings = node.exportClause.elements.map((element) => ({
+          exportedName: element.name.text,
+          localName: element.propertyName?.text ?? element.name.text
+        }));
         result.exports.push({
           exportType: exportedFrom ? 're-export' : 'named',
-          exportedNames,
+          exportedNames: bindings.map((binding) => binding.exportedName),
+          bindings,
           isTypeOnly: node.isTypeOnly,
           sourceLine,
           exportedFrom
@@ -237,6 +261,7 @@ export class ASTParser {
         result.exports.push({
           exportType: 're-export',
           exportedNames: ['*'],
+          bindings: [],
           isTypeOnly: false,
           sourceLine,
           exportedFrom
@@ -247,6 +272,10 @@ export class ASTParser {
       result.exports.push({
         exportType: 'default',
         exportedNames: ['default'],
+        bindings: [{
+          exportedName: 'default',
+          localName: ts.isIdentifier(node.expression) ? node.expression.text : 'default'
+        }],
         isTypeOnly: false,
         sourceLine
       });
@@ -343,12 +372,61 @@ export class ASTParser {
     node.members.forEach((member) => {
       if (ts.isMethodDeclaration(member) && member.name && ts.isIdentifier(member.name)) {
         methods.push(member.name.text);
+        const methodName = `${name}.${member.name.text}`;
+        const parameters = member.parameters.map((parameter) => (
+          ts.isIdentifier(parameter.name) ? parameter.name.text : 'unknown'
+        ));
+        result.functions.push({
+          name: methodName,
+          parameters,
+          returnType: member.type?.getText(sourceFile),
+          isAsync: member.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword) || false,
+          isExported,
+          sourceLine: sourceFile.getLineAndCharacterOfPosition(member.getStart()).line + 1
+        });
+        const decorators = ts.canHaveDecorators(member) ? ts.getDecorators(member) ?? [] : [];
+        decorators.forEach((decorator) => {
+          const decoratorName = this.getDecoratorName(decorator);
+          if (decoratorName) {
+            this.addRelationship(result, 'decorates', methodName, decoratorName, sourceFile.getLineAndCharacterOfPosition(decorator.getStart()).line + 1);
+          }
+        });
       } else if (ts.isPropertyDeclaration(member) && member.name && ts.isIdentifier(member.name)) {
         properties.push(member.name.text);
       }
     });
 
     const sourceLine = sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1;
+
+    if (extendsClass) {
+      this.addRelationship(result, 'extends', name, extendsClass, sourceLine);
+    }
+
+    const extendsExpression = node.heritageClauses?.find(
+      (clause) => clause.token === ts.SyntaxKind.ExtendsKeyword
+    )?.types[0]?.expression;
+    if (extendsExpression && ts.isCallExpression(extendsExpression)) {
+      const mixinName = ts.isIdentifier(extendsExpression.expression)
+        ? extendsExpression.expression.text
+        : ts.isPropertyAccessExpression(extendsExpression.expression)
+          ? extendsExpression.expression.name.text
+          : undefined;
+      if (mixinName) {
+        this.addRelationship(result, 'uses', name, mixinName, sourceLine);
+      }
+    }
+
+    const decorators = ts.canHaveDecorators(node) ? ts.getDecorators(node) ?? [] : [];
+    decorators.forEach((decorator) => {
+      const decoratorName = this.getDecoratorName(decorator);
+      if (decoratorName) {
+        this.addRelationship(result, 'decorates', name, decoratorName, sourceFile.getLineAndCharacterOfPosition(decorator.getStart()).line + 1);
+      }
+    });
+
+    implementsList.forEach((implementedType) => {
+      this.addRelationship(result, 'implements', name, implementedType, sourceLine);
+    });
 
     result.classes.push({
       name,
@@ -391,6 +469,109 @@ export class ASTParser {
       methods,
       sourceLine
     });
+  }
+
+  private getDecoratorName(decorator: ts.Decorator): string | undefined {
+    const expression = ts.isCallExpression(decorator.expression)
+      ? decorator.expression.expression
+      : decorator.expression;
+    if (ts.isIdentifier(expression)) {
+      return expression.text;
+    }
+    if (ts.isPropertyAccessExpression(expression)) {
+      return expression.name.text;
+    }
+    return undefined;
+  }
+
+  private collectFunctionCallRelationships(sourceFile: ts.SourceFile, result: ASTParseResult): void {
+    const visitFunctionBody = (node: ts.Node, currentFunctionName?: string, currentClassName?: string): void => {
+      if (ts.isClassDeclaration(node) && node.name) {
+        currentClassName = node.name.text;
+      }
+
+      if (ts.isFunctionDeclaration(node) && node.name) {
+        currentFunctionName = node.name.text;
+      } else if (ts.isMethodDeclaration(node) && currentClassName && node.name && ts.isIdentifier(node.name)) {
+        currentFunctionName = `${currentClassName}.${node.name.text}`;
+      } else if (
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.initializer &&
+        (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+      ) {
+        currentFunctionName = node.name.text;
+      }
+
+      if (currentFunctionName) {
+        const body = ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node)
+          ? node.body
+          : undefined;
+
+        if (body) {
+          const visitCallExpressions = (callNode: ts.Node): void => {
+            if (ts.isCallExpression(callNode)) {
+              const callee = callNode.expression;
+              let targetName: string | undefined;
+
+              if (ts.isIdentifier(callee)) {
+                targetName = callee.text;
+              } else if (ts.isPropertyAccessExpression(callee)) {
+                targetName = callee.expression.kind === ts.SyntaxKind.ThisKeyword && currentClassName
+                  ? `${currentClassName}.${callee.name.text}`
+                  : callee.name.text;
+              }
+
+              if (targetName && targetName !== currentFunctionName) {
+                this.addRelationship(result, 'calls', currentFunctionName!, targetName, sourceFile.getLineAndCharacterOfPosition(callNode.getStart()).line + 1);
+              }
+
+              for (const argument of callNode.arguments) {
+                const callbackName = ts.isIdentifier(argument)
+                  ? argument.text
+                  : ts.isPropertyAccessExpression(argument)
+                    ? argument.name.text
+                    : undefined;
+                if (callbackName) {
+                  this.addRelationship(result, 'callback', currentFunctionName!, callbackName, sourceFile.getLineAndCharacterOfPosition(argument.getStart()).line + 1);
+                }
+              }
+            }
+
+            if (ts.isJsxAttribute(callNode) && callNode.name && ts.isIdentifier(callNode.name) && callNode.name.text.startsWith('on')) {
+              const initializer = callNode.initializer;
+              if (initializer && ts.isJsxExpression(initializer) && initializer.expression && ts.isIdentifier(initializer.expression)) {
+                this.addRelationship(result, 'handles', currentFunctionName!, initializer.expression.text, sourceFile.getLineAndCharacterOfPosition(callNode.getStart()).line + 1);
+              }
+            }
+
+            ts.forEachChild(callNode, visitCallExpressions);
+          };
+
+          visitCallExpressions(body);
+        }
+      }
+
+      ts.forEachChild(node, (child) => visitFunctionBody(child, currentFunctionName, currentClassName));
+    };
+
+    visitFunctionBody(sourceFile);
+  }
+
+  private addRelationship(result: ASTParseResult, type: ASTRelationship['type'], source: string, target: string, sourceLine: number): void {
+    if (!source || !target || source === target) {
+      return;
+    }
+
+    const duplicate = result.relationships.some((relationship) => (
+      relationship.type === type &&
+      relationship.source === source &&
+      relationship.target === target
+    ));
+
+    if (!duplicate) {
+      result.relationships.push({ type, source, target, sourceLine });
+    }
   }
 
   private containsJSX(node: ts.Node): boolean {

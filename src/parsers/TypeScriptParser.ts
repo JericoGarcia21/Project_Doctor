@@ -32,6 +32,9 @@ export class TypeScriptParser extends BaseParser {
       // Convert AST classes to simple string array
       result.classes = astResult.classes.map(cls => cls.name);
 
+      // Preserve symbol relationships for Phase 3 graph analysis
+      result.relationships = astResult.relationships;
+
       // Store full AST result for advanced analysis
       (result as ParseResult & { astResult?: ASTParseResult }).astResult = astResult;
 

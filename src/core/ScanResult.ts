@@ -1,12 +1,14 @@
 import { ProjectContext, ScanStatistics } from './types';
 import { Finding } from '../diagnostics/Finding';
+import { ProjectGraph } from '../graph/ProjectGraph';
 
 export class ScanResult {
   constructor(
     public readonly context: ProjectContext,
     public readonly findings: Finding[],
     public readonly statistics: ScanStatistics,
-    public readonly scanDuration: number
+    public readonly scanDuration: number,
+    public readonly relationshipGraph: ProjectGraph = new ProjectGraph()
   ) {}
 
   hasErrors(): boolean {
@@ -31,6 +33,7 @@ export class ScanResult {
       findings: this.findings,
       statistics: this.statistics,
       scanDuration: this.scanDuration,
+      relationshipGraph: this.relationshipGraph.export(),
       hasErrors: this.hasErrors(),
       hasWarnings: this.hasWarnings()
     };
