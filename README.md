@@ -14,7 +14,11 @@ This extension helps developers:
 - Visualize code relationships
 - Understand change impact across the project
 
-## Current Features (Phase 1 - Foundation)
+## Current Status
+
+**Phase 1 and Phase 2 are complete. Phase 3 is in progress.** The scanner builds a relationship graph for TypeScript/JavaScript projects and performs initial Laravel route/controller analysis. Relationship analysis is currently limited to the first 100 TypeScript/JavaScript source files per scan.
+
+## Current Features
 
 ✅ **Project Scanning**
 - Automatic project structure discovery
@@ -23,11 +27,23 @@ This extension helps developers:
 - Git repository detection
 - Configurable file enumeration with smart ignoring
 
-✅ **Basic Analysis**
+✅ **Project Analysis**
 - Dependency analysis
 - File size analysis
 - Security configuration checks
 - Environment file detection
+- Framework detection and configuration validation
+- Import/export analysis, dependency graphs, and circular import detection
+
+✅ **Code Relationship Analysis (Phase 3 in progress)**
+- TypeScript/JavaScript call, import, inheritance, implementation, decorator, mixin, callback, and named JSX handler relationships
+- Cross-file symbol resolution for named/default imports, re-exports, and `tsconfig` path aliases
+- Relationship graph returned with each scan result
+- Laravel `routes/web.php` and `routes/api.php` analysis for common routes, resource routes, and route groups
+- Route-to-controller and route-to-public-action mapping, including action parameter metadata
+- PHP parsing powered by `php-parser`
+
+Phase 3 work still planned includes anonymous inline callbacks, Laravel middleware and model/Blade analysis, frontend component relationships, API/data-flow mapping, and graph visualization. See [ROADMAP.md](ROADMAP.md) for details.
 
 ✅ **Dashboard**
 - Clean VS Code webview-based dashboard
@@ -107,8 +123,8 @@ This extension helps developers:
 - HTML/CSS (with VS Code theming)
 
 **Code Analysis:**
-- TypeScript Compiler API (for AST parsing)
-- PHP Parser (designed for future Laravel analysis)
+- TypeScript Compiler API (AST parsing and symbol relationships)
+- `php-parser` (PHP AST parsing and Laravel route/controller analysis)
 
 **Project Relationship Model:**
 - Graphology (graph data structure library)
@@ -117,7 +133,7 @@ This extension helps developers:
 - simple-git
 
 **Local Storage:**
-- SQLite (via better-sqlite3)
+- SQLite database compiled and accessed through `sql.js`
 
 **Testing:**
 - Vitest
@@ -184,10 +200,13 @@ project-doctor/
 │   │   └── SecurityAnalyzer.ts
 │   ├── parsers/                  # Language parsers
 │   │   ├── Parser.ts
+│   │   ├── ASTParser.ts
 │   │   ├── TypeScriptParser.ts
-│   │   └── PHPParser.ts
+│   │   ├── PHPParser.ts
+│   │   └── LockFileParser.ts
 │   ├── graph/                    # Relationship graph
 │   │   ├── ProjectGraph.ts
+│   │   ├── ImportGraph.ts
 │   │   ├── GraphNode.ts
 │   │   └── GraphEdge.ts
 │   ├── git/                      # Git integration
@@ -212,7 +231,7 @@ project-doctor/
 
 ## Roadmap
 
-### Phase 1 — Foundation ✅ (Current)
+### Phase 1 — Foundation ✅ Complete
 - [x] VS Code extension setup
 - [x] Project scanner foundation
 - [x] Analyzer architecture
@@ -222,17 +241,18 @@ project-doctor/
 - [x] Git service foundation
 - [x] Graph model foundation
 
-### Phase 2 — Project Scanner
-- [ ] Advanced file enumeration
-- [ ] TypeScript AST parsing
-- [ ] Import/export detection
-- [ ] Dependency tree building
-- [ ] Configuration validation
-- [ ] Performance optimization
+### Phase 2 — Advanced Project Scanner ✅ Complete
+- [x] Advanced file enumeration and framework detection
+- [x] TypeScript/JavaScript AST parsing and import/export detection
+- [x] Dependency tree building and circular dependency detection
+- [x] Configuration validation
+- [x] Scan caching and performance statistics
 
 ### Phase 3 — Code Relationship Analysis
-- [ ] Full TypeScript analysis
-- [ ] PHP/Laravel analysis
+- [x] TypeScript/JavaScript calls, imports, class relationships, callbacks, and named JSX handlers
+- [x] Cross-file symbols, re-exports, and TypeScript path aliases
+- [x] Initial Laravel route groups, controller actions, and route-to-action mapping
+- [ ] Complete PHP/Laravel analysis (middleware, models, Blade templates)
 - [ ] Component relationship mapping
 - [ ] API flow detection
 - [ ] Database schema inference

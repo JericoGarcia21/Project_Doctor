@@ -193,7 +193,7 @@ This document outlines all planned development phases for the Project Doctor VS 
   - Empty states
 
 ### Test Results ✅
-- ✅ **44 tests passing**
+  - ✅ **44 tests passed at Phase 2 completion** (historical baseline)
 - ✅ **All compilation successful**
 - ✅ **Zero errors**
 
@@ -209,7 +209,7 @@ This document outlines all planned development phases for the Project Doctor VS 
 9. `src/validators/PackageJsonValidator.ts` - package.json validation 🆕
 10. `src/cache/ScanCache.ts` - Caching system 🆕
 11. `src/views/SidebarProvider.ts` - Sidebar dashboard
-12. `tests/parsers/ASTParser.test.ts` - 24 tests
+12. `tests/parsers/ASTParser.test.ts` - 26 tests
 
 ### Deliverables ✅
 - ✅ Advanced ProjectScanner with AST parsing
@@ -237,8 +237,12 @@ This document outlines all planned development phases for the Project Doctor VS 
 - ✅ **Cross-file symbol resolution** for relative named imports, including aliased function calls
 - ✅ **Default imports, barrel re-exports, and TypeScript path aliases**
 - ✅ **Class method nodes and `this.method()` call relationships**
+- ✅ **Named callback arguments and named JSX event-handler relationships**
+- ✅ **Class and method decorator relationships, plus mixin factory usage**
 - ✅ **Scan relationship graph exposure** through `ScanResult` and JSON serialization
 - ✅ **Module import edges** included in the scan relationship graph
+- ✅ **Laravel route and controller-action mapping** for common web/API route declarations
+- ✅ **Laravel route group prefix/controller context** for chained and options-array groups
 
 ### Planned Features
 
@@ -249,11 +253,6 @@ This document outlines all planned development phases for the Project Doctor VS 
   - [x] Track named callback arguments and named JSX event-handler references
   - [ ] Model anonymous inline callback and event-handler functions
 
-- [ ] **Class Relationship Mapping**
-  - Track inheritance hierarchies
-  - Map interface implementations
-  - Identify decorator usage
-  - Track mixin patterns
 - [x] **Class Relationship Mapping**
   - [x] Track inheritance hierarchies
   - [x] Map interface implementations
@@ -267,14 +266,14 @@ This document outlines all planned development phases for the Project Doctor VS 
   - [x] Track side-effect import edges
 
 #### PHP/Laravel Analysis
-- [ ] **Laravel Route Detection**
+- [x] **Laravel Route Detection (initial support)**
   - [x] Parse `routes/web.php` and `routes/api.php`
   - [x] Extract verb, URI, source line, and common match/resource route declarations
   - [x] Map imported controller references and actions, including `Controller@action`
   - [x] Resolve prefix and controller context from chained and array-based route groups
   - [ ] Handle route group middleware, namespaces, and route-name attributes
 
-- [ ] **Controller Analysis**
+- [x] **Controller Analysis (initial support)**
   - [x] Parse controller files under `app/Http/Controllers`
   - [x] Extract public action methods and parameter names
   - [x] Link routes to existing controller actions
@@ -872,23 +871,20 @@ This document outlines all planned development phases for the Project Doctor VS 
 
 ---
 
-## Development Timeline (Estimated)
+## Development Status
 
-| Phase | Estimated Duration | Status | Completion |
-|-------|-------------------|--------|------------|
-| Phase 1 - Foundation | ✅ Complete | ✅ DONE | 100% |
-| Phase 2 - Scanner | 3-4 weeks | ✅ DONE | 100% |
-| Phase 3 - Relationships | 4-6 weeks | 🔜 PENDING | 0% |
-| Phase 4 - Problems | 3-4 weeks | 🔜 PENDING | 0% |
-| Phase 5 - Impact | 4-5 weeks | 🔜 PENDING | 0% |
-| Phase 6 - Git | 2-3 weeks | 🔜 PENDING | 0% |
-| Phase 7 - Dashboard | 3-4 weeks | ✅ STARTED | 30% |
-| Phase 8 - AI | 6-8 weeks | 🔜 PENDING | 0% |
+| Phase | Status | Current Scope |
+|-------|--------|---------------|
+| Phase 1 - Foundation | Complete | Core extension, scanner, analyzers, storage, and dashboard foundation |
+| Phase 2 - Scanner | Complete | Advanced scanning, parsing, dependency analysis, validation, and caching |
+| Phase 3 - Relationships | In progress | TypeScript/JavaScript graph and initial Laravel route/controller analysis |
+| Phase 4 - Problems | Not started | Broken references, dead code, and deeper security checks |
+| Phase 5 - Impact | Not started | Change impact and risk analysis |
+| Phase 6 - Git | Not started | History and regression analysis |
+| Phase 7 - Dashboard improvements | Partially implemented | Sidebar exists; interactive graph and advanced dashboard work remain |
+| Phase 8 - AI | Not started | AI-assisted explanations and recommendations |
 
-**Total Progress**: ~28.75% (2.3/8 phases complete)  
-**Remaining Timeline**: 20-27 weeks (5-6.5 months)
-
-**Note**: Phase 7 (Dashboard) was partially implemented early with the sidebar feature!
+The earlier week estimates and percentage totals are omitted because they are not being actively tracked.
 
 ---
 
@@ -902,20 +898,20 @@ This document outlines all planned development phases for the Project Doctor VS 
 - ✅ All tests pass (20/20)
 
 ### Phase 2 ✅ (100% Complete)
-- ✅ Scan 10,000+ files in under 5 seconds
-- ✅ Parse TypeScript AST for 100% of .ts files
-- ✅ Build complete import graph
+- ✅ Enumerate project files while excluding common generated/dependency directories
+- ✅ Build import graphs and relationship graphs (relationship parsing currently caps TypeScript/JavaScript input at 100 files per scan)
 - ✅ Detect 6+ major frameworks
-- ✅ 44 tests passing (24 new tests added)
+- ✅ 44 tests passed at Phase 2 completion (historical baseline)
 - ✅ Circular dependency detection working
 - ✅ Lock file parsing (npm, yarn, pnpm)
 - ✅ Config validation (tsconfig.json, package.json)
 - ✅ Caching system implemented
 
 ### Phase 3
-- Map 100% of API routes to controllers
-- Build complete component hierarchy
-- Generate interactive graph visualization
+- Resolve common TypeScript/JavaScript relationships and initial Laravel route/controller flows
+- Add Laravel middleware, Eloquent model, and Blade relationship analysis
+- Build frontend component and API/data-flow graphs
+- Add interactive graph visualization and queries
 
 ### Phase 4
 - Detect 99% of broken imports
@@ -953,14 +949,14 @@ This roadmap is a living document. As Project Doctor evolves:
 3. Timeline estimates may adjust based on complexity
 4. Some features may move between phases for better flow
 
-**Current Status**: Phase 3 - Relationship Mapping started 🔄  
-**Next Milestone**: Expand Phase 3 with cross-file dependency graphing and Laravel mapping
+**Current Status**: Phase 3 - Relationship Analysis in progress
+**Next Milestone**: Add Laravel middleware and Eloquent model relationships, then continue with Blade and frontend component mapping
 
 **Recent Achievements** 🎉:
 - ✅ Phase 2 COMPLETE!
-- ✅ Phase 3 initial milestone: function call and class relationship extraction implemented
-- ✅ TypeScript AST parser fully working
-- ✅ Import/export graph builder operational
+- ✅ Phase 3 TypeScript/JavaScript relationships: cross-file calls, aliases, methods, callbacks, JSX handlers, decorators, and mixins
+- ✅ Initial Laravel route groups and route-to-controller/action mapping
+- ✅ TypeScript AST parsing and import/export graph builder operational
 - ✅ Framework detector for 6 frameworks
 - ✅ Dependency tree analyzer complete
 - ✅ Circular dependency detection
@@ -968,7 +964,7 @@ This roadmap is a living document. As Project Doctor evolves:
 - ✅ Configuration validators (tsconfig, package.json) 🆕
 - ✅ Caching system 🆕
 - ✅ Sidebar dashboard feature (bonus!)
-- ✅ 44 tests passing
+- ✅ 55 tests passing across 6 test files (latest full test run)
 - ✅ Technology detection by file extensions
 
 ---
