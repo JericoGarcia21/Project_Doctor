@@ -16,6 +16,37 @@ export interface PHPControllerAction {
   sourceLine: number;
 }
 
+export interface LaravelMiddleware {
+  routeUri: string;
+  routeMethod: string;
+  middleware: string[];
+  sourceLine: number;
+  controller?: string;
+  action?: string;
+}
+
+export interface EloquentModel {
+  className: string;
+  namespace: string;
+  tableName?: string;
+  relationships: EloquentRelationship[];
+  fillable: string[];
+  hidden: string[];
+  casts: Record<string, string>;
+  sourceLine: number;
+  filePath: string;
+}
+
+export interface EloquentRelationship {
+  type: 'hasOne' | 'hasMany' | 'belongsTo' | 'belongsToMany' | 'hasOneThrough' | 'hasManyThrough' | 'morphTo' | 'morphOne' | 'morphMany' | 'morphToMany' | 'morphedByMany';
+  method: string;
+  relatedModel: string;
+  foreignKey?: string;
+  localKey?: string;
+  pivotTable?: string;
+  sourceLine: number;
+}
+
 interface PHPNode {
   kind?: string;
   loc?: { start?: { line?: number } };
@@ -203,6 +234,436 @@ export class PHPParser extends BaseParser {
     };
     visit(ast);
     return actions;
+  }
+
+  parseLaravelMiddleware(content: string, filePath: string): LaravelMiddleware[] {
+    const ast = this.engine.parseCode(content, filePath) as unknown as PHPNode;
+    const middlewares: LaravelMiddleware[] = [];
+    const controllerAliases = new Map<string, string>();
+
+    const collectAliases = (node: unknown): void => {
+      if (!node || typeof node !== 'object') return;
+      const current = node as PHPNode;
+      if (current.kind === 'usegroup' && Array.isArray(current.items)) {
+        const namespace = typeof current.name === 'string' ? current.name : '';
+        for (const item of current.items) {
+          const useItem = this.asNode(item);
+          if (typeof useItem?.name !== 'string') continue;
+          const importedName = namespace ? `${namespace}\\${useItem.name}` : useItem.name;
+          const alias = typeof useItem.alias === 'string' ? useItem.alias : importedName.split('\\').pop();
+          if (alias) controllerAliases.set(alias, importedName.replace(/^\\/, ''));
+        }
+      }
+      this.traverseNode(current, collectAliases);
+    };
+    collectAliases(ast);
+
+    const visit = (node: unknown, context: { prefix?: string; controller?: string; middleware: string[] } = { middleware: [] }): void => {
+      if (!node || typeof node !== 'object') return;
+      const current = node as PHPNode;
+
+      if (current.kind === 'call' && this.callMethod(current) === 'group') {
+        const localContext = this.groupContext(current, controllerAliases);
+        const groupMiddleware = this.extractMiddlewareFromGroup(current);
+        const nestedContext = {
+          prefix: this.joinPrefix(context.prefix, localContext.prefix),
+          controller: localContext.controller ?? context.controller,
+          middleware: [...context.middleware, ...groupMiddleware]
+        };
+        if (Array.isArray(current.arguments)) {
+          current.arguments.forEach(argument => visit(argument, nestedContext));
+        }
+        return;
+      }
+
+      if (current.kind === 'call' && this.isMiddlewareCall(current)) {
+        const routeMiddleware = this.extractMiddlewareValues(Array.isArray(current.arguments) ? current.arguments : []);
+        const innerCall = this.asNode(this.asNode(current.what)?.what);
+        if (innerCall) {
+          visit(innerCall, { ...context, middleware: [...context.middleware, ...routeMiddleware] });
+        }
+        return;
+      }
+
+      const route = this.extractRoute(current, controllerAliases, context.controller);
+      if (route) {
+        const routeMiddleware = this.extractMiddlewareFromRoute(current);
+        const allMiddleware = [...context.middleware, ...routeMiddleware];
+        middlewares.push({
+          routeUri: this.joinPrefix(context.prefix, route.uri) ?? route.uri,
+          routeMethod: route.method,
+          middleware: allMiddleware,
+          sourceLine: route.sourceLine,
+          controller: route.controller,
+          action: route.action
+        });
+      }
+
+      this.traverseNode(current, (child) => visit(child, context));
+    };
+    visit(ast);
+    return middlewares;
+  }
+
+  private isMiddlewareCall(call: PHPNode): boolean {
+    const lookup = this.asNode(call.what);
+    return lookup?.kind === 'propertylookup' && this.classNodeName(lookup.offset) === 'middleware';
+  }
+
+  parseEloquentModels(content: string, filePath: string): EloquentModel[] {
+    const ast = this.engine.parseCode(content, filePath) as unknown as PHPNode;
+    const models: EloquentModel[] = [];
+
+    const visit = (node: unknown, namespace = ''): void => {
+      if (!node || typeof node !== 'object') return;
+      const current = node as PHPNode;
+      const currentNamespace = current.kind === 'namespace' && typeof current.name === 'string'
+        ? current.name.replace(/^\\/, '')
+        : namespace;
+
+      if (current.kind === 'class' && Array.isArray(current.body)) {
+        const className = this.classNodeName(current.name);
+        if (className && this.isEloquentModel(current)) {
+          const model = this.extractEloquentModel(current, className, currentNamespace, filePath);
+          if (model) models.push(model);
+        }
+      }
+
+      this.traverseNode(current, (child) => visit(child, currentNamespace));
+    };
+    visit(ast);
+    return models;
+  }
+
+  private traverseNode(node: PHPNode, callback: (node: unknown) => void): void {
+    for (const [key, value] of Object.entries(node)) {
+      if (key === 'loc' || key === 'kind' || key === 'name' || key === 'value' || key === 'raw' || key === 'unicode' || key === 'isDoubleQuote' || key === 'resolution' || key === 'curly' || key === 'byRef' || key === 'unpack' || key === 'shortForm' || key === 'readonly' || key === 'nullable' || key === 'type' || key === 'attrGroups' || key === 'hooks' || key === 'visibility' || key === 'isStatic' || key === 'isAbstract' || key === 'isFinal' || key === 'isReadonly' || key === 'visibilitySet' || key === 'isAnonymous' || key === 'withBrackets' || key === 'byref' || key === 'errors' || key === 'source' || key === 'start' || key === 'end' || key === 'offset' || key === 'column') continue;
+      if (Array.isArray(value)) {
+        value.forEach(item => {
+          if (item && typeof item === 'object') callback(item);
+        });
+      } else if (value && typeof value === 'object') {
+        callback(value);
+      }
+    }
+  }
+
+  private classNodeName(value: unknown): string | undefined {
+    if (!value || typeof value !== 'object') return undefined;
+    const node = value as PHPNode;
+    if (node.kind === 'identifier' && typeof node.name === 'string') return node.name;
+    if (node.kind === 'name' && typeof node.name === 'string') return node.name;
+    return undefined;
+  }
+
+  private extractMiddlewareFromGroup(groupCall: PHPNode): string[] {
+    const chain: { method: string; arguments: unknown[] }[] = [];
+    let current: PHPNode | undefined = groupCall;
+    while (current?.kind === 'call') {
+      const lookup = this.asNode(current.what);
+      const method = this.callMethod(current);
+      if (method) {
+        chain.push({ method: method.toLowerCase(), arguments: Array.isArray(current.arguments) ? current.arguments : [] });
+      }
+      current = this.asNode(lookup?.what);
+    }
+
+    const middlewares: string[] = [];
+    for (const call of chain) {
+      if (call.method === 'middleware') {
+        middlewares.push(...this.extractMiddlewareValues(call.arguments));
+      }
+    }
+    return middlewares;
+  }
+
+  private extractMiddlewareFromRoute(routeCall: PHPNode): string[] {
+    const middlewares: string[] = [];
+    let current: PHPNode | undefined = routeCall;
+
+    while (current?.kind === 'call') {
+      const lookup = this.asNode(current.what);
+      if (lookup?.kind === 'propertylookup') {
+        const methodName = this.classNodeName(lookup.offset);
+        if (methodName === 'middleware') {
+          middlewares.push(...this.extractMiddlewareValues(Array.isArray(current.arguments) ? current.arguments : []));
+        }
+        current = this.asNode(lookup.what);
+      } else {
+        break;
+      }
+    }
+
+    return middlewares;
+  }
+
+  private extractMiddlewareValues(args: unknown[]): string[] {
+    const middlewares: string[] = [];
+    for (const arg of args) {
+      const node = this.asNode(arg);
+      if (node?.kind === 'string' && typeof node.value === 'string') {
+        middlewares.push(node.value);
+      } else if (node?.kind === 'array' && Array.isArray(node.items)) {
+        for (const item of node.items) {
+          const entry = this.asNode(item);
+          const value = entry?.kind === 'entry' ? entry.value : item;
+          const strVal = this.stringValue(value);
+          if (strVal) middlewares.push(strVal);
+        }
+      }
+    }
+    return middlewares;
+  }
+
+  private isEloquentModel(classNode: PHPNode): boolean {
+    const superClass = this.asNode(classNode.extends);
+    if (superClass) {
+      const superClassName = this.classNodeName(superClass.name) ?? (typeof superClass.name === 'string' ? superClass.name : undefined);
+      if (superClassName === 'Model' || superClassName === 'Authenticatable' || superClassName?.endsWith('Model')) {
+        return true;
+      }
+    }
+    const implementsList = Array.isArray(classNode.implements) ? classNode.implements : [];
+    for (const impl of implementsList) {
+      const implNode = this.asNode(impl);
+      const implName = this.classNodeName(implNode?.name) ?? (typeof implNode?.name === 'string' ? implNode.name : undefined);
+      if (implName === 'Authenticatable') return true;
+    }
+    return false;
+  }
+
+  private extractEloquentModel(classNode: PHPNode, className: string, namespace: string, filePath: string): EloquentModel | undefined {
+    const relationships: EloquentRelationship[] = [];
+    const fillable: string[] = [];
+    const hidden: string[] = [];
+    const casts: Record<string, string> = {};
+    let tableName: string | undefined;
+    const sourceLine = this.sourceLine(classNode);
+
+    for (const member of (Array.isArray(classNode.body) ? classNode.body : [])) {
+      const memberNode = this.asNode(member);
+
+      if (memberNode?.kind === 'propertystatement' && Array.isArray(memberNode.properties)) {
+        for (const prop of memberNode.properties) {
+          const propNode = this.asNode(prop);
+          const propName = this.classNodeName(propNode?.name);
+          if (propName === 'table' && propNode?.value) {
+            const strVal = this.stringValue(propNode.value);
+            if (strVal) tableName = strVal;
+          }
+          if (propName === 'fillable' && propNode?.value) {
+            const arr = this.arrayValues(propNode.value);
+            for (const val of arr) {
+              const str = this.stringValue(val);
+              if (str) fillable.push(str);
+            }
+          }
+          if (propName === 'hidden' && propNode?.value) {
+            const arr = this.arrayValues(propNode.value);
+            for (const val of arr) {
+              const str = this.stringValue(val);
+              if (str) hidden.push(str);
+            }
+          }
+          if (propNode?.value) {
+            const obj = this.asNode(propNode.value);
+            if (obj?.kind === 'array' && Array.isArray(obj.items)) {
+              for (const item of obj.items) {
+                const entry = this.asNode(item);
+                if (entry?.kind === 'entry') {
+                  const key = this.stringValue(entry.key);
+                  const val = this.stringValue(entry.value);
+                  if (key && val) casts[key] = val;
+                }
+              }
+            }
+          }
+        }
+        continue;
+      }
+
+      if (memberNode?.kind !== 'method') continue;
+
+      const methodName = this.classNodeName(memberNode.name);
+      if (!methodName) continue;
+
+      if (methodName === 'tableName' || methodName === 'getTable') {
+        const returnStmt = this.findReturnStatement(memberNode.body);
+        const strVal = this.stringValue(returnStmt);
+        if (strVal) tableName = strVal;
+      }
+
+      if (methodName === 'fillable' || methodName === 'getFillable') {
+        const returnStmt = this.findReturnStatement(memberNode.body);
+        const arr = this.arrayValues(returnStmt);
+        for (const val of arr) {
+          const str = this.stringValue(val);
+          if (str) fillable.push(str);
+        }
+      }
+
+      if (methodName === 'hidden' || methodName === 'getHidden') {
+        const returnStmt = this.findReturnStatement(memberNode.body);
+        const arr = this.arrayValues(returnStmt);
+        for (const val of arr) {
+          const str = this.stringValue(val);
+          if (str) hidden.push(str);
+        }
+      }
+
+      if (methodName === 'casts' || methodName === 'getCasts') {
+        const returnStmt = this.findReturnStatement(memberNode.body);
+        const obj = this.asNode(returnStmt);
+        if (obj?.kind === 'array' && Array.isArray(obj.items)) {
+          for (const item of obj.items) {
+            const entry = this.asNode(item);
+            if (entry?.kind === 'entry') {
+              const key = this.stringValue(entry.key);
+              const val = this.stringValue(entry.value);
+              if (key && val) casts[key] = val;
+            }
+          }
+        }
+      }
+
+      const relType = this.getRelationshipType(methodName) ?? this.getRelationshipTypeFromBody(memberNode);
+      if (relType) {
+        const relationshipCall = this.asNode(this.findReturnStatement(memberNode.body));
+        const rel = relationshipCall?.kind === 'call'
+          ? this.extractRelationship(relationshipCall, relType, methodName, this.sourceLine(memberNode))
+          : undefined;
+        if (rel) relationships.push(rel);
+      }
+    }
+
+    return {
+      className,
+      namespace,
+      tableName,
+      relationships,
+      fillable,
+      hidden,
+      casts,
+      sourceLine,
+      filePath
+    };
+  }
+
+  private getRelationshipType(methodName: string): EloquentRelationship['type'] | undefined {
+    const relMap: Record<string, EloquentRelationship['type']> = {
+      'hasOne': 'hasOne',
+      'hasMany': 'hasMany',
+      'belongsTo': 'belongsTo',
+      'belongsToMany': 'belongsToMany',
+      'hasOneThrough': 'hasOneThrough',
+      'hasManyThrough': 'hasManyThrough',
+      'morphTo': 'morphTo',
+      'morphOne': 'morphOne',
+      'morphMany': 'morphMany',
+      'morphToMany': 'morphToMany',
+      'morphedByMany': 'morphedByMany'
+    };
+    return relMap[methodName];
+  }
+
+  private getRelationshipTypeFromBody(method: PHPNode): EloquentRelationship['type'] | undefined {
+    const returnStmt = this.findReturnStatement(method.body);
+    if (!returnStmt) return undefined;
+    const returnNode = this.asNode(returnStmt);
+    if (returnNode?.kind !== 'call') return undefined;
+    const lookup = this.asNode(returnNode.what);
+    if (lookup?.kind !== 'propertylookup') return undefined;
+    const offset = this.asNode(lookup.offset);
+    const methodName = this.classNodeName(offset);
+    if (!methodName) return undefined;
+    return this.getRelationshipType(methodName);
+  }
+
+  private extractRelationship(method: PHPNode, type: EloquentRelationship['type'], methodName: string, sourceLine: number): EloquentRelationship | undefined {
+    const args = Array.isArray(method.arguments) ? method.arguments : [];
+    const firstArg = this.asNode(args[0]);
+    const relatedModel = this.resolveModelName(firstArg);
+
+    if (!relatedModel) return undefined;
+
+    const rel: EloquentRelationship = {
+      type,
+      method: methodName,
+      relatedModel,
+      sourceLine
+    };
+
+    if (args.length > 1) {
+      const secondArg = this.asNode(args[1]);
+      const foreignKey = this.stringValue(secondArg);
+      if (foreignKey) rel.foreignKey = foreignKey;
+    }
+
+    if (args.length > 2) {
+      const thirdArg = this.asNode(args[2]);
+      const localKey = this.stringValue(thirdArg);
+      if (localKey) rel.localKey = localKey;
+    }
+
+    if (type === 'belongsToMany' || type === 'morphToMany' || type === 'morphedByMany') {
+      if (args.length > 1) {
+        const secondArg = this.asNode(args[1]);
+        const pivotTable = this.stringValue(secondArg);
+        if (pivotTable) rel.pivotTable = pivotTable;
+      }
+    }
+
+    return rel;
+  }
+
+  private resolveModelName(node: PHPNode | undefined): string | undefined {
+    if (!node) return undefined;
+    if (node.kind === 'staticlookup') {
+      const classRef = this.asNode(node.what);
+      const classKeyword = this.classNodeName(node.offset);
+      if (classKeyword === 'class') {
+        const modelName = typeof classRef?.name === 'string' ? classRef.name : this.classNodeName(classRef?.name);
+        if (modelName) return modelName.replace(/^\\/, '');
+      }
+    }
+    if (node.kind === 'name' && typeof node.name === 'string') {
+      return node.name.replace(/^\\/, '');
+    }
+    if (node.kind === 'string' && typeof node.value === 'string') {
+      return node.value;
+    }
+    return undefined;
+  }
+
+  private findReturnStatement(body: unknown): unknown {
+    if (!body || typeof body !== 'object') return undefined;
+    const bodyNode = body as PHPNode;
+    if (bodyNode.kind === 'return') return bodyNode.expr;
+    if (Array.isArray(bodyNode)) {
+      for (const item of bodyNode) {
+        const result = this.findReturnStatement(item);
+        if (result !== undefined) return result;
+      }
+    }
+    if (Array.isArray(bodyNode.children)) {
+      for (const child of bodyNode.children) {
+        const result = this.findReturnStatement(child);
+        if (result !== undefined) return result;
+      }
+    }
+    for (const [key, value] of Object.entries(bodyNode)) {
+      if (key === 'loc' || key === 'kind' || key === 'name' || key === 'value' || key === 'raw' || key === 'unicode' || key === 'isDoubleQuote' || key === 'resolution' || key === 'curly' || key === 'byRef' || key === 'unpack' || key === 'shortForm' || key === 'readonly' || key === 'nullable' || key === 'type' || key === 'attrGroups' || key === 'hooks' || key === 'visibility' || key === 'isStatic' || key === 'isAbstract' || key === 'isFinal' || key === 'isReadonly' || key === 'visibilitySet' || key === 'isAnonymous' || key === 'withBrackets' || key === 'byref' || key === 'errors' || key === 'source' || key === 'start' || key === 'end' || key === 'offset' || key === 'column') continue;
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          const result = this.findReturnStatement(item);
+          if (result !== undefined) return result;
+        }
+      } else if (value && typeof value === 'object') {
+        const result = this.findReturnStatement(value);
+        if (result !== undefined) return result;
+      }
+    }
+    return undefined;
   }
 
   private extractRoute(call: PHPNode, controllerAliases: Map<string, string>, groupController?: string): LaravelRoute | undefined {

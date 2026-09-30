@@ -121,12 +121,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <body>
       <div class="container">
         <div class="empty-state">
-          <div class="icon">🏥</div>
-          <h3>Welcome to Project Doctor</h3>
+          <h2>Project Doctor</h2>
+          <h3>No workspace open</h3>
           <p>Open a project folder to start analyzing your code health.</p>
-        </div>
-        <div class="branding">
-          Powered by Project Doctor
         </div>
       </div>
     </body>
@@ -145,21 +142,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <body>
       <div class="container">
         <div class="project-header">
-          <h2><span class="project-icon">🏥</span>${projectName}</h2>
+          <h2>${this._escapeHtml(projectName)}</h2>
         </div>
         
         <div class="empty-state">
-          <div class="icon">🔍</div>
-          <h3>Ready to Diagnose</h3>
-          <p>Click the button below to start your project health check. We'll analyze your code, dependencies, and configurations.</p>
-          <button class="scan-button" onclick="scan()">
-            <span class="button-icon">🔍</span>
-            Start Diagnosis
+          <h3>Ready to scan</h3>
+          <p>Analyze files, dependencies, and project configuration.</p>
+          <button class="scan-button" data-action="scan">
+            Scan workspace
           </button>
-        </div>
-
-        <div class="branding">
-          Powered by Project Doctor
         </div>
       </div>
       ${this._getScripts()}
@@ -179,21 +170,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <body>
       <div class="container">
         <div class="project-header">
-          <h2><span class="project-icon">🏥</span>${projectName}</h2>
+          <h2>${this._escapeHtml(projectName)}</h2>
         </div>
         
         <div class="empty-state">
-          <div class="icon">⚠️</div>
-          <h3>Diagnosis Error</h3>
-          <p>We encountered an issue while loading your scan results. Please try scanning again.</p>
-          <button class="scan-button" onclick="scan()">
-            <span class="button-icon">🔄</span>
-            Retry Diagnosis
+          <h3>Could not load scan results</h3>
+          <p>Try scanning the workspace again.</p>
+          <button class="scan-button" data-action="scan">
+            Retry scan
           </button>
-        </div>
-
-        <div class="branding">
-          Powered by Project Doctor
         </div>
       </div>
       ${this._getScripts()}
@@ -221,6 +206,25 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       const date = new Date(timestamp);
       return date.toLocaleString();
     };
+    const technologies = stats.technologies.map(tech => this._escapeHtml(tech));
+    const renderedFindings = findings.slice(0, 10).map(finding => {
+      const severity = this._severityClass(finding.severity);
+      const line = Math.max(1, Number(finding.line) || 1);
+      const column = Math.max(1, Number(finding.column) || 1);
+      const endLine = Math.max(1, Number(finding.endLine) || line);
+      const endColumn = Math.max(1, Number(finding.endColumn) || column + 10);
+      const filePath = finding.filePath ? this._escapeHtml(finding.filePath) : '';
+
+      return `
+        <div class="finding-item ${severity}" ${finding.filePath ? `role="button" tabindex="0" data-file-path="${filePath}" data-line="${line}" data-column="${column}" data-end-line="${endLine}" data-end-column="${endColumn}"` : ''}>
+          <div class="finding-header">
+            <span class="finding-severity">${this._escapeHtml(finding.severity)}</span>
+            <span class="finding-title">${this._escapeHtml(finding.title)}</span>
+          </div>
+          <div class="finding-description">${this._escapeHtml(finding.description)}</div>
+          ${finding.filePath ? `<div class="finding-file">${filePath}${finding.line ? `:${line}` : ''}</div>` : ''}
+        </div>`;
+    }).join('');
 
     return `<!DOCTYPE html>
     <html lang="en">
@@ -233,13 +237,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <body>
       <div class="container">
         <div class="project-header">
-          <h2><span class="project-icon">🏥</span>${projectName}</h2>
-          <div class="last-scan">${formatDate(lastScanned)}</div>
+          <h2>${this._escapeHtml(projectName)}</h2>
+          <div class="last-scan">Last scan: ${this._escapeHtml(formatDate(lastScanned))}</div>
         </div>
 
         <div class="stats-section">
           <div class="stat-card">
-            <div class="stat-icon">📄</div>
             <div class="stat-info">
               <div class="stat-value">${stats.files}</div>
               <div class="stat-label">Total Files</div>
@@ -247,18 +250,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           </div>
 
           <div class="stat-card ${stats.problems > 0 ? 'error' : 'success'}">
-            <div class="stat-icon">${stats.problems > 0 ? '🔴' : '✅'}</div>
             <div class="stat-info">
               <div class="stat-value">${stats.problems}</div>
-              <div class="stat-label">Errors Found</div>
+              <div class="stat-label"><span class="status-dot error ${stats.problems > 0 ? 'active' : ''}" aria-hidden="true"></span>Errors Found</div>
             </div>
           </div>
 
           <div class="stat-card ${stats.warnings > 0 ? 'warning' : 'success'}">
-            <div class="stat-icon">${stats.warnings > 0 ? '⚠️' : '✅'}</div>
             <div class="stat-info">
               <div class="stat-value">${stats.warnings}</div>
-              <div class="stat-label">Warnings</div>
+              <div class="stat-label"><span class="status-dot warning ${stats.warnings > 0 ? 'active' : ''}" aria-hidden="true"></span>Warnings</div>
             </div>
           </div>
         </div>
@@ -267,7 +268,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           <div class="section">
             <h3>Technologies Detected</h3>
             <div class="tech-badges">
-              ${stats.technologies.map(tech => `<span class="tech-badge">${tech}</span>`).join('')}
+              ${technologies.map(tech => `<span class="tech-badge">${tech}</span>`).join('')}
             </div>
           </div>
         ` : ''}
@@ -276,38 +277,24 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           <div class="section">
             <h3>Issues & Recommendations</h3>
             <div class="findings-list">
-              ${findings.slice(0, 10).map(finding => `
-                <div class="finding-item ${finding.severity.toLowerCase()}" ${finding.filePath ? `onclick="openFinding('${finding.filePath}', ${finding.line || 1}, ${finding.column || 1}, ${finding.endLine || finding.line || 1}, ${finding.endColumn || (finding.column || 1) + 10})"` : ''}>
-                  <div class="finding-header">
-                    <span class="finding-severity">${finding.severity}</span>
-                    <span class="finding-title">${finding.title}</span>
-                  </div>
-                  <div class="finding-description">${finding.description}</div>
-                  ${finding.filePath ? `<div class="finding-file">📁 ${finding.filePath}${finding.line ? `:${finding.line}` : ''}</div>` : ''}
-                </div>
-              `).join('')}
+              ${renderedFindings}
               ${findings.length > 10 ? `<div class="more-findings">+ ${findings.length - 10} more issues to review</div>` : ''}
             </div>
           </div>
         ` : `
           <div class="section">
             <div class="success-message">
-              <div class="icon">✨</div>
               <div>Perfect! No issues detected</div>
             </div>
           </div>
         `}
 
         <div class="action-section">
-          <button class="scan-button" onclick="scan()">
-            <span class="button-icon">🔍</span>
-            Rescan Project
+          <button class="scan-button" data-action="scan">
+            Scan project again
           </button>
         </div>
 
-        <div class="branding">
-          Powered by Project Doctor
-        </div>
       </div>
       ${this._getScripts()}
     </body>
@@ -345,20 +332,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         font-weight: 500;
         margin-bottom: 4px;
         color: var(--vscode-foreground);
-        display: flex;
-        align-items: center;
-        gap: 6px;
-      }
-
-      .project-icon {
-        font-size: 16px;
-        opacity: 0.8;
       }
 
       .last-scan {
         font-size: 11px;
         color: var(--vscode-descriptionForeground);
-        padding-left: 22px;
+        padding-left: 0;
       }
 
       /* Native List-Style Statistics */
@@ -379,14 +358,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         padding: 8px;
       }
 
-      .stat-icon {
-        font-size: 16px;
-        margin-right: 8px;
-        opacity: 0.7;
-        width: 20px;
-        text-align: center;
-      }
-
       .stat-info {
         flex: 1;
       }
@@ -399,9 +370,31 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       }
 
       .stat-label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
         font-size: 11px;
         color: var(--vscode-descriptionForeground);
         margin-top: 2px;
+      }
+
+      .status-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex: none;
+        background: var(--vscode-descriptionForeground);
+        opacity: 0.5;
+      }
+
+      .status-dot.error.active {
+        background: var(--vscode-errorForeground);
+        opacity: 1;
+      }
+
+      .status-dot.warning.active {
+        background: var(--vscode-editorWarning-foreground);
+        opacity: 1;
       }
 
       /* Native Sections */
@@ -415,7 +408,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         margin-bottom: 8px;
         color: var(--vscode-descriptionForeground);
         text-transform: uppercase;
-        letter-spacing: 0.3px;
+        letter-spacing: 0;
       }
 
       /* Native Technology List */
@@ -447,17 +440,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         font-size: 12px;
         transition: background-color 0.1s ease;
         position: relative;
+      }
+
+      .finding-item[data-file-path] {
         cursor: pointer;
       }
 
-      .finding-item:hover {
+      .finding-item[data-file-path]:hover {
         background: var(--vscode-list-hoverBackground);
         margin: 0 -8px;
         padding: 8px;
       }
 
-      .finding-item:not([onclick]) {
-        cursor: default;
+      .finding-item[data-file-path]:focus-visible,
+      .scan-button:focus-visible {
+        outline: 1px solid var(--vscode-focusBorder);
+        outline-offset: 2px;
       }
 
       .finding-item.error::before {
@@ -507,7 +505,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         padding: 1px 4px;
         background: var(--vscode-badge-background);
         color: var(--vscode-badge-foreground);
-        letter-spacing: 0.2px;
+        letter-spacing: 0;
       }
 
       .finding-title {
@@ -543,18 +541,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         padding: 32px 16px;
       }
 
-      .empty-state .icon {
-        font-size: 32px;
-        margin-bottom: 12px;
-        opacity: 0.6;
-      }
-
       .empty-state h3 {
         font-size: 13px;
         margin-bottom: 6px;
         font-weight: 500;
         text-transform: none;
-        letter-spacing: normal;
+        letter-spacing: 0;
       }
 
       .empty-state p {
@@ -573,10 +565,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         color: var(--vscode-foreground);
         font-weight: 400;
         font-size: 12px;
-      }
-
-      .success-message .icon {
-        font-size: 16px;
       }
 
       /* Native Button */
@@ -604,50 +592,54 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         opacity: 0.95;
       }
 
-      .button-icon {
-        font-size: 14px;
-      }
-
       /* Action Section */
       .action-section {
         margin-top: 16px;
         padding-top: 16px;
       }
 
-      /* Minimal Branding */
-      .branding {
-        text-align: center;
-        padding: 12px 0;
-        margin-top: 16px;
-        color: var(--vscode-descriptionForeground);
-        font-size: 10px;
-        opacity: 0.4;
-      }
     </style>`;
   }
 
   private _getScripts(): string {
     return `<script>
       const vscode = acquireVsCodeApi();
-      
-      function scan() {
-        vscode.postMessage({ type: 'scan' });
-      }
+      document.querySelectorAll('[data-action="scan"]').forEach(button => {
+        button.addEventListener('click', () => vscode.postMessage({ type: 'scan' }));
+      });
 
-      function refresh() {
-        vscode.postMessage({ type: 'refresh' });
-      }
-
-      function openFinding(filePath, line, column, endLine, endColumn) {
-        vscode.postMessage({ 
-          type: 'openFinding', 
-          filePath: filePath,
-          line: line,
-          column: column,
-          endLine: endLine,
-          endColumn: endColumn
+      document.querySelectorAll('.finding-item[data-file-path]').forEach(item => {
+        const openFinding = () => vscode.postMessage({
+          type: 'openFinding',
+          filePath: item.dataset.filePath,
+          line: Number(item.dataset.line),
+          column: Number(item.dataset.column),
+          endLine: Number(item.dataset.endLine),
+          endColumn: Number(item.dataset.endColumn)
         });
-      }
+        item.addEventListener('click', openFinding);
+        item.addEventListener('keydown', event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            openFinding();
+          }
+        });
+      });
     </script>`;
+  }
+
+  private _escapeHtml(value: unknown): string {
+    return String(value ?? '').replace(/[&<>"']/g, character => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    })[character] ?? character);
+  }
+
+  private _severityClass(severity: string): string {
+    const normalized = severity.toLowerCase();
+    return ['error', 'warning', 'info'].includes(normalized) ? normalized : 'info';
   }
 }

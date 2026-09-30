@@ -6,6 +6,7 @@ import { FileAnalyzer } from '../analyzers/FileAnalyzer';
 import { SecurityAnalyzer } from '../analyzers/SecurityAnalyzer';
 import { DependencyTreeAnalyzer } from '../analyzers/DependencyTreeAnalyzer';
 import { ConfigurationAnalyzer } from '../analyzers/ConfigurationAnalyzer';
+import { LaravelAnalyzer } from '../analyzers/LaravelAnalyzer';
 import { ProjectDoctorDatabase } from '../database/Database';
 import { ProjectRepository } from '../database/repositories/ProjectRepository';
 import { ScanRepository } from '../database/repositories/ScanRepository';
@@ -46,7 +47,8 @@ export class ScanProjectCommand {
             new FileAnalyzer(),
             new SecurityAnalyzer(),
             new DependencyTreeAnalyzer(),
-            new ConfigurationAnalyzer()
+            new ConfigurationAnalyzer(),
+            new LaravelAnalyzer()
           ];
 
           const scanner = new ProjectScanner(analyzers);

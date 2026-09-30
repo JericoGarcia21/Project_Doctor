@@ -243,6 +243,9 @@ This document outlines all planned development phases for the Project Doctor VS 
 - ✅ **Module import edges** included in the scan relationship graph
 - ✅ **Laravel route and controller-action mapping** for common web/API route declarations
 - ✅ **Laravel route group prefix/controller context** for chained and options-array groups
+- ✅ **Laravel route middleware relationships** from routes, route groups, and nested groups
+- ✅ **Eloquent model and relationship graph** with table mappings and model relationship edges
+- ✅ **Eloquent relationship extraction** for common returned calls, including hasMany, belongsTo, and belongsToMany
 
 ### Planned Features
 
@@ -271,7 +274,8 @@ This document outlines all planned development phases for the Project Doctor VS 
   - [x] Extract verb, URI, source line, and common match/resource route declarations
   - [x] Map imported controller references and actions, including `Controller@action`
   - [x] Resolve prefix and controller context from chained and array-based route groups
-  - [ ] Handle route group middleware, namespaces, and route-name attributes
+  - [x] Handle middleware declared on routes and nested route groups
+  - [ ] Handle route group namespaces and route-name attributes
 
 - [x] **Controller Analysis (initial support)**
   - [x] Parse controller files under `app/Http/Controllers`
@@ -279,11 +283,10 @@ This document outlines all planned development phases for the Project Doctor VS 
   - [x] Link routes to existing controller actions
   - [ ] Identify middleware usage
 
-- [ ] **Model Analysis**
-  - Parse Eloquent models
-  - Extract relationships (hasMany, belongsTo, etc.)
-  - Identify database table mappings
-  - Track model events
+- [x] **Eloquent Model Analysis (initial support)**
+  - [x] Parse Eloquent models and extract common relationships (hasMany, belongsTo, etc.)
+  - [x] Identify explicit database table mappings
+  - [ ] Track model events
 
 - [ ] **Blade Template Analysis**
   - Parse .blade.php files
@@ -950,12 +953,14 @@ This roadmap is a living document. As Project Doctor evolves:
 4. Some features may move between phases for better flow
 
 **Current Status**: Phase 3 - Relationship Analysis in progress
-**Next Milestone**: Add Laravel middleware and Eloquent model relationships, then continue with Blade and frontend component mapping
+**Next Milestone**: Add Blade template analysis, then continue with frontend component and API/data-flow mapping
 
 **Recent Achievements** 🎉:
 - ✅ Phase 2 COMPLETE!
 - ✅ Phase 3 TypeScript/JavaScript relationships: cross-file calls, aliases, methods, callbacks, JSX handlers, decorators, and mixins
 - ✅ Initial Laravel route groups and route-to-controller/action mapping
+- ✅ Laravel middleware and initial Eloquent model relationship analysis
+- ✅ TypeScript compilation and all 72 tests passing across 7 test files
 - ✅ TypeScript AST parsing and import/export graph builder operational
 - ✅ Framework detector for 6 frameworks
 - ✅ Dependency tree analyzer complete
@@ -964,9 +969,8 @@ This roadmap is a living document. As Project Doctor evolves:
 - ✅ Configuration validators (tsconfig, package.json) 🆕
 - ✅ Caching system 🆕
 - ✅ Sidebar dashboard feature (bonus!)
-- ✅ 55 tests passing across 6 test files (latest full test run)
 - ✅ Technology detection by file extensions
 
 ---
 
-*Last Updated: 2026-09-29*
+*Last Updated: 2026-09-30*

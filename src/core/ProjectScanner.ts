@@ -584,6 +584,8 @@ export class ProjectScanner {
     }
 
     await this.addLaravelRouteRelationships(rootPath, files, graph);
+    await this.addLaravelMiddlewareRelationships(rootPath, files, graph);
+    await this.addEloquentModelRelationships(rootPath, files, graph);
     return graph;
   }
 
@@ -665,6 +667,116 @@ export class ProjectScanner {
         }
       } catch (error) {
         console.debug(`[ProjectScanner] Skipping Laravel route analysis for ${file.path}`);
+      }
+    }
+  }
+
+  private async addLaravelMiddlewareRelationships(rootPath: string, files: FileInfo[], graph: ProjectGraph): Promise<void> {
+    const routeFiles = files.filter(file => {
+      if (file.extension !== '.php') return false;
+      const relativePath = path.relative(rootPath, file.path).split(path.sep).join('/');
+      return /^routes\//i.test(relativePath);
+    });
+
+    for (const file of routeFiles) {
+      try {
+        const content = await fs.readFile(file.path, 'utf-8');
+        const middlewares = this.phpParser.parseLaravelMiddleware(content, file.path);
+
+        for (const mw of middlewares) {
+          const routeId = `${file.path}#middleware:${mw.routeMethod}:${mw.routeUri}:${mw.sourceLine}`;
+          graph.addNode(createNode(routeId, NodeType.API_ROUTE, `${mw.routeMethod} ${mw.routeUri}`, {
+            filePath: file.path,
+            metadata: {
+              method: mw.routeMethod,
+              uri: mw.routeUri,
+              middleware: mw.middleware,
+              sourceLine: mw.sourceLine
+            }
+          }));
+
+          for (const m of mw.middleware) {
+            const middlewareId = `php-middleware:${m}`;
+            graph.addNode(createNode(middlewareId, NodeType.SERVICE, m, {
+              metadata: { middleware: m }
+            }));
+            graph.addEdge(createEdge(routeId, middlewareId, RelationType.USES, {
+              sourceLine: mw.sourceLine
+            }));
+          }
+        }
+      } catch (error) {
+        console.debug(`[ProjectScanner] Skipping Laravel middleware analysis for ${file.path}`);
+      }
+    }
+  }
+
+  private async addEloquentModelRelationships(rootPath: string, files: FileInfo[], graph: ProjectGraph): Promise<void> {
+    const modelFiles = files.filter(file => {
+      if (file.extension !== '.php') return false;
+      const relativePath = path.relative(rootPath, file.path).split(path.sep).join('/');
+      return /^app\/models\//i.test(relativePath) || /^app\/[^\/]+\.php$/i.test(relativePath);
+    });
+
+    for (const file of modelFiles) {
+      try {
+        const content = await fs.readFile(file.path, 'utf-8');
+        const models = this.phpParser.parseEloquentModels(content, file.path);
+
+        for (const model of models) {
+          const modelId = `php-model:${model.namespace}\\${model.className}`;
+          graph.addNode(createNode(modelId, NodeType.MODEL, model.className, {
+            filePath: file.path,
+            metadata: {
+              className: model.className,
+              namespace: model.namespace,
+              tableName: model.tableName,
+              fillable: model.fillable,
+              hidden: model.hidden,
+              casts: model.casts,
+              sourceLine: model.sourceLine
+            }
+          }));
+
+          if (model.tableName) {
+            const tableId = `php-table:${model.tableName}`;
+            graph.addNode(createNode(tableId, NodeType.DATABASE_TABLE, model.tableName, {
+              metadata: { tableName: model.tableName }
+            }));
+            graph.addEdge(createEdge(modelId, tableId, RelationType.MAPS_TO, {
+              sourceLine: model.sourceLine
+            }));
+          }
+
+          for (const rel of model.relationships) {
+            const relId = `${modelId}#relation:${rel.method}`;
+            graph.addNode(createNode(relId, NodeType.FUNCTION, rel.method, {
+              filePath: file.path,
+              metadata: {
+                relationshipType: rel.type,
+                relatedModel: rel.relatedModel,
+                foreignKey: rel.foreignKey,
+                localKey: rel.localKey,
+                pivotTable: rel.pivotTable,
+                sourceLine: rel.sourceLine
+              }
+            }));
+            graph.addEdge(createEdge(modelId, relId, RelationType.USES, {
+              sourceLine: rel.sourceLine
+            }));
+
+            const relatedModelId = `php-model:${rel.relatedModel}`;
+            graph.addNode(createNode(relatedModelId, NodeType.MODEL, rel.relatedModel.split('\\').pop() ?? rel.relatedModel, {
+              metadata: { className: rel.relatedModel }
+            }));
+            graph.addEdge(createEdge(relId, relatedModelId, RelationType.USES, {
+              relationshipType: rel.type,
+              sourceLine: rel.sourceLine
+            }));
+          }
+        }
+      } catch (error) {
+        console.debug(`[ProjectScanner] Skipping Eloquent model analysis for ${file.path}`);
       }
     }
   }
