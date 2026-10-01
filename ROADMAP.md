@@ -227,7 +227,7 @@ This document outlines all planned development phases for the Project Doctor VS 
 
 ## Phase 3 — Code Relationship Analysis
 
-**Status**: In Progress  
+**Status**: Paused after substantial implementation  
 **Goal**: Build comprehensive relationship graph between all project components
 
 ### Implemented Milestones
@@ -238,6 +238,9 @@ This document outlines all planned development phases for the Project Doctor VS 
 - ✅ **Default imports, barrel re-exports, and TypeScript path aliases**
 - ✅ **Class method nodes and `this.method()` call relationships**
 - ✅ **Named callback arguments and named JSX event-handler relationships**
+- ✅ **Anonymous inline callback and JSX event-handler relationships**
+- ✅ **JSX component composition and prop metadata detection**
+- ✅ **Service dependency graphing for constructor-injected collaborators**
 - ✅ **Class and method decorator relationships, plus mixin factory usage**
 - ✅ **Scan relationship graph exposure** through `ScanResult` and JSON serialization
 - ✅ **Module import edges** included in the scan relationship graph
@@ -246,15 +249,24 @@ This document outlines all planned development phases for the Project Doctor VS 
 - ✅ **Laravel route middleware relationships** from routes, route groups, and nested groups
 - ✅ **Eloquent model and relationship graph** with table mappings and model relationship edges
 - ✅ **Eloquent relationship extraction** for common returned calls, including hasMany, belongsTo, and belongsToMany
+- ✅ **Blade template parsing** for includes, component usage, and passed variables
+- ✅ **Graph query foundation** for dependencies, dependents, and relationship-filtered paths
+- ✅ **Eloquent model lifecycle event graphing**
 
 ### Planned Features
+
+#### Graph Query Foundation
+- [x] Query direct dependencies
+- [x] Query direct dependents
+- [x] Find paths filtered by relationship type
+- [ ] Find unused exports
 
 #### Full TypeScript/JavaScript Analysis
 - [x] **Function Call Tracking**
   - [x] Resolve local and cross-file calls through named/default imports, re-exports, and tsconfig paths
   - [x] Track calls between methods on the same class via `this.method()`
   - [x] Track named callback arguments and named JSX event-handler references
-  - [ ] Model anonymous inline callback and event-handler functions
+  - [x] Model anonymous inline callback and event-handler functions
 
 - [x] **Class Relationship Mapping**
   - [x] Track inheritance hierarchies
@@ -275,50 +287,50 @@ This document outlines all planned development phases for the Project Doctor VS 
   - [x] Map imported controller references and actions, including `Controller@action`
   - [x] Resolve prefix and controller context from chained and array-based route groups
   - [x] Handle middleware declared on routes and nested route groups
-  - [ ] Handle route group namespaces and route-name attributes
+  - [x] Handle route group namespaces and route-name attributes
 
 - [x] **Controller Analysis (initial support)**
   - [x] Parse controller files under `app/Http/Controllers`
   - [x] Extract public action methods and parameter names
   - [x] Link routes to existing controller actions
-  - [ ] Identify middleware usage
+  - [x] Identify middleware usage
 
 - [x] **Eloquent Model Analysis (initial support)**
   - [x] Parse Eloquent models and extract common relationships (hasMany, belongsTo, etc.)
   - [x] Identify explicit database table mappings
-  - [ ] Track model events
+  - [x] Track model events
 
-- [ ] **Blade Template Analysis**
-  - Parse .blade.php files
-  - Extract component usage
-  - Map template includes
-  - Identify passed variables
+- [x] **Blade Template Analysis**
+  - [x] Parse .blade.php files
+  - [x] Extract component usage
+  - [x] Map template includes
+  - [x] Identify passed variables
 
 #### Component Relationship Mapping
-- [ ] **Frontend Component Graph**
-  - Map React/Vue component hierarchy
-  - Track component props
-  - Identify component composition
-  - Map context/store usage
+- [x] **Frontend Component Graph**
+  - [x] Map React/Vue component hierarchy
+  - [x] Track component props
+  - [x] Identify component composition
+  - [x] Map context/store usage
 
-- [ ] **Backend Service Graph**
-  - Map service dependencies
-  - Track repository patterns
-  - Identify service interfaces
-  - Map dependency injection
+- [x] **Backend Service Graph**
+  - [x] Map service dependencies
+  - [x] Track repository patterns
+  - [x] Identify service interfaces
+  - [x] Map dependency injection
 
 #### API Flow Detection
 - [ ] **Request Flow Mapping**
-  - Frontend request → API route
-  - Route → Controller → Service
-  - Service → Model → Database
-  - Response flow back to frontend
+  - [ ] Frontend request → API route
+  - [x] Route → Controller → Service
+  - [ ] Service → Model → Database
+  - [ ] Response flow back to frontend
 
 - [ ] **API Endpoint Discovery**
-  - Extract REST endpoints
-  - Map GraphQL queries/mutations
-  - Identify RPC methods
-  - Track WebSocket events
+  - [x] Extract REST endpoints from supported Laravel route declarations
+  - [ ] Map GraphQL queries/mutations
+  - [ ] Identify RPC methods
+  - [ ] Track WebSocket events
 
 #### Database Schema Inference
 - [ ] **Migration Analysis**
@@ -328,10 +340,10 @@ This document outlines all planned development phases for the Project Doctor VS 
   - Identify foreign keys
 
 - [ ] **Model-Table Mapping**
-  - Map models to database tables
-  - Identify column mappings
-  - Track relationships
-  - Detect orphaned tables
+  - [x] Map models to database tables
+  - [ ] Identify column mappings
+  - [x] Track relationships
+  - [ ] Detect orphaned tables
 
 #### Graph Visualization
 - [ ] **Interactive Graph View**
@@ -341,10 +353,10 @@ This document outlines all planned development phases for the Project Doctor VS 
   - Highlight critical paths
 
 - [ ] **Graph Queries**
-  - "What depends on this file?"
-  - "What does this component use?"
-  - "Show me the path from X to Y"
-  - "Find all unused exports"
+  - [x] "What depends on this file?"
+  - [x] "What does this component use?"
+  - [x] "Show me the path from X to Y"
+  - [ ] "Find all unused exports"
 
 ### Deliverables
 - Complete project relationship graph
@@ -880,7 +892,7 @@ This document outlines all planned development phases for the Project Doctor VS 
 |-------|--------|---------------|
 | Phase 1 - Foundation | Complete | Core extension, scanner, analyzers, storage, and dashboard foundation |
 | Phase 2 - Scanner | Complete | Advanced scanning, parsing, dependency analysis, validation, and caching |
-| Phase 3 - Relationships | In progress | TypeScript/JavaScript graph and initial Laravel route/controller analysis |
+| Phase 3 - Relationships | Paused after substantial implementation | TypeScript/JavaScript graph, Laravel route/controller/middleware/model/event analysis, Blade parsing, component composition, service dependencies, and graph query APIs |
 | Phase 4 - Problems | Not started | Broken references, dead code, and deeper security checks |
 | Phase 5 - Impact | Not started | Change impact and risk analysis |
 | Phase 6 - Git | Not started | History and regression analysis |
@@ -911,10 +923,11 @@ The earlier week estimates and percentage totals are omitted because they are no
 - ✅ Caching system implemented
 
 ### Phase 3
-- Resolve common TypeScript/JavaScript relationships and initial Laravel route/controller flows
-- Add Laravel middleware, Eloquent model, and Blade relationship analysis
-- Build frontend component and API/data-flow graphs
-- Add interactive graph visualization and queries
+- ✅ Resolve common TypeScript/JavaScript relationships and Laravel route/controller flows
+- ✅ Add Laravel middleware, Eloquent model/event, and Blade relationship analysis
+- ✅ Build frontend component and service dependency graphs
+- ✅ Add graph dependency, dependent, and filtered-path query APIs
+- Add API/data-flow mapping, database migration analysis, and interactive graph visualization
 
 ### Phase 4
 - Detect 99% of broken imports
@@ -952,15 +965,17 @@ This roadmap is a living document. As Project Doctor evolves:
 3. Timeline estimates may adjust based on complexity
 4. Some features may move between phases for better flow
 
-**Current Status**: Phase 3 - Relationship Analysis in progress
-**Next Milestone**: Add Blade template analysis, then continue with frontend component and API/data-flow mapping
+**Current Status**: Phase 3 - Relationship Analysis paused after substantial implementation; 65 tests pass across 7 test files
+**Next Milestone**: Resume with API/data-flow mapping, database migration analysis, and interactive graph visualization
 
 **Recent Achievements** 🎉:
 - ✅ Phase 2 COMPLETE!
-- ✅ Phase 3 TypeScript/JavaScript relationships: cross-file calls, aliases, methods, callbacks, JSX handlers, decorators, and mixins
+- ✅ Phase 3 TypeScript/JavaScript relationships: cross-file calls, aliases, methods, callbacks, JSX handlers, decorators, mixins, component composition, and service graphs
 - ✅ Initial Laravel route groups and route-to-controller/action mapping
-- ✅ Laravel middleware and initial Eloquent model relationship analysis
-- ✅ TypeScript compilation and all 72 tests passing across 7 test files
+- ✅ Laravel middleware, Blade template parsing, and Eloquent model relationship analysis
+- ✅ Laravel controller middleware and Eloquent lifecycle event graphing
+- ✅ Graph dependency, dependent, and relationship-filtered path queries
+- ✅ TypeScript compilation and all 65 tests passing across the current suite
 - ✅ TypeScript AST parsing and import/export graph builder operational
 - ✅ Framework detector for 6 frameworks
 - ✅ Dependency tree analyzer complete
@@ -973,4 +988,4 @@ This roadmap is a living document. As Project Doctor evolves:
 
 ---
 
-*Last Updated: 2026-09-30*
+*Last Updated: 2026-10-01*

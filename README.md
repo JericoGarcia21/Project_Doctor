@@ -16,7 +16,9 @@ This extension helps developers:
 
 ## Current Status
 
-**Phase 1 and Phase 2 are complete. Phase 3 is in progress.** The scanner builds a relationship graph for TypeScript/JavaScript projects and performs initial Laravel route/controller analysis. Relationship analysis is currently limited to the first 100 TypeScript/JavaScript source files per scan.
+**Phase 1 and Phase 2 are complete. Phase 3 is substantially implemented and currently paused.** The scanner builds a relationship graph for TypeScript/JavaScript projects, Laravel routes/controllers, Blade templates, JSX component composition, service dependency injection, controller middleware, and Eloquent model events. Relationship analysis remains intentionally scoped to the first 100 TypeScript/JavaScript source files per scan.
+
+**Pause checkpoint:** the project compiles successfully and the full test suite passes with **65 tests across 7 test files**. The next Phase 3 work should resume with API/data-flow expansion, database migration analysis, and graph visualization.
 
 ## Current Features
 
@@ -35,15 +37,22 @@ This extension helps developers:
 - Framework detection and configuration validation
 - Import/export analysis, dependency graphs, and circular import detection
 
-✅ **Code Relationship Analysis (Phase 3 in progress)**
+✅ **Code Relationship Analysis (Phase 3 substantially implemented)**
 - TypeScript/JavaScript call, import, inheritance, implementation, decorator, mixin, callback, and named JSX handler relationships
+- Anonymous inline callback and JSX event-handler relationships
 - Cross-file symbol resolution for named/default imports, re-exports, and `tsconfig` path aliases
 - Relationship graph returned with each scan result
+- Dependency, dependent, and relationship-filtered path queries on the project graph
 - Laravel `routes/web.php` and `routes/api.php` analysis for common routes, resource routes, and route groups
 - Route-to-controller and route-to-public-action mapping, including action parameter metadata
+- Laravel route and controller middleware relationships
+- Eloquent model relationship, table, and lifecycle event graphing
+- Blade template parsing for includes, components, and template variables
+- JSX component composition and prop metadata detection
+- Service dependency mapping for constructor-injected collaborators
 - PHP parsing powered by `php-parser`
 
-Phase 3 work still planned includes anonymous inline callbacks, Laravel middleware and model/Blade analysis, frontend component relationships, API/data-flow mapping, and graph visualization. See [ROADMAP.md](ROADMAP.md) for details.
+Remaining Phase 3 work includes broader API/data-flow mapping, database migration/schema inference, interactive graph visualization, unused-export analysis, and final broadening of Laravel and JS edge cases. See [ROADMAP.md](ROADMAP.md) for details.
 
 ✅ **Dashboard**
 - Clean VS Code webview-based dashboard
@@ -251,9 +260,11 @@ project-doctor/
 ### Phase 3 — Code Relationship Analysis
 - [x] TypeScript/JavaScript calls, imports, class relationships, callbacks, and named JSX handlers
 - [x] Cross-file symbols, re-exports, and TypeScript path aliases
-- [x] Initial Laravel route groups, controller actions, and route-to-action mapping
-- [ ] Complete PHP/Laravel analysis (middleware, models, Blade templates)
-- [ ] Component relationship mapping
+- [x] Laravel route groups, controller actions, middleware, and route-to-action mapping
+- [x] Eloquent model and table relationship mapping
+- [x] Blade template parsing for includes, components, and variables
+- [x] Frontend component composition and prop metadata detection
+- [x] Backend service dependency graphing for injected collaborators
 - [ ] API flow detection
 - [ ] Database schema inference
 - [ ] Graph visualization

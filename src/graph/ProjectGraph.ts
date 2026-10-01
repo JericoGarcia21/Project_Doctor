@@ -58,7 +58,25 @@ export class ProjectGraph {
     return relationships;
   }
 
-  findPath(sourceId: string, targetId: string): string[] | null {
+  getDependencies(nodeId: string, type?: RelationType): GraphNode[] {
+    return this.getRelationships(nodeId, type)
+      .map(relationship => this.getNode(relationship.target))
+      .filter((node): node is GraphNode => node !== undefined);
+  }
+
+  getDependents(nodeId: string, type?: RelationType): GraphNode[] {
+    if (!this.graph.hasNode(nodeId)) {
+      return [];
+    }
+
+    return this.graph.inEdges(nodeId)
+      .map(edgeId => this.graph.getEdgeAttributes(edgeId) as GraphEdge)
+      .filter(relationship => !type || relationship.type === type)
+      .map(relationship => this.getNode(relationship.source))
+      .filter((node): node is GraphNode => node !== undefined);
+  }
+
+  findPath(sourceId: string, targetId: string, type?: RelationType): string[] | null {
     if (!this.graph.hasNode(sourceId) || !this.graph.hasNode(targetId)) {
       return null;
     }
@@ -82,8 +100,13 @@ export class ProjectGraph {
         break;
       }
 
-      const neighbors = this.graph.outNeighbors(current);
-      for (const neighbor of neighbors) {
+      const neighbors = this.graph.outEdges(current)
+        .map(edgeId => ({
+          edge: this.graph.getEdgeAttributes(edgeId) as GraphEdge,
+          target: this.graph.target(edgeId)
+        }))
+        .filter(({ edge }) => !type || edge.type === type);
+      for (const { target: neighbor } of neighbors) {
         if (visited.has(neighbor)) {
           continue;
         }

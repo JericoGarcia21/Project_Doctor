@@ -106,4 +106,29 @@ describe('ProjectGraph', () => {
 
     expect(graph.findPath('A', 'C')).toEqual(['A', 'B', 'C']);
   });
+
+  it('should query dependencies and dependents', () => {
+    const source = createNode('source', NodeType.FILE, 'source.ts');
+    const dependency = createNode('dependency', NodeType.FILE, 'dependency.ts');
+    const dependent = createNode('dependent', NodeType.FILE, 'dependent.ts');
+    graph.addNode(source);
+    graph.addNode(dependency);
+    graph.addNode(dependent);
+    graph.addEdge(createEdge('source', 'dependency', RelationType.IMPORTS));
+    graph.addEdge(createEdge('dependent', 'source', RelationType.IMPORTS));
+
+    expect(graph.getDependencies('source', RelationType.IMPORTS).map(node => node.id)).toEqual(['dependency']);
+    expect(graph.getDependents('source', RelationType.IMPORTS).map(node => node.id)).toEqual(['dependent']);
+  });
+
+  it('should filter paths by relationship type', () => {
+    graph.addNode(createNode('A', NodeType.FILE, 'A.ts'));
+    graph.addNode(createNode('B', NodeType.FILE, 'B.ts'));
+    graph.addNode(createNode('C', NodeType.FILE, 'C.ts'));
+    graph.addEdge(createEdge('A', 'B', RelationType.IMPORTS));
+    graph.addEdge(createEdge('B', 'C', RelationType.CALLS));
+
+    expect(graph.findPath('A', 'C', RelationType.IMPORTS)).toBeNull();
+    expect(graph.findPath('A', 'C')).toEqual(['A', 'B', 'C']);
+  });
 });

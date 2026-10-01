@@ -272,5 +272,33 @@ describe('ASTParser', () => {
         ])
       );
     });
+
+    it('should track anonymous callbacks and inline JSX event handlers', () => {
+      const code = `
+        function app(items: number[]) {
+          items.forEach(item => console.log(item));
+          return <button onClick={() => save()}>Save</button>;
+        }
+      `;
+      const result = parser.parse(code, 'test.tsx');
+
+      expect(result.functions.map(fn => fn.name)).toEqual(
+        expect.arrayContaining(['anonymousCallback@3', 'anonymousCallback@4'])
+      );
+      expect(result.relationships).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'callback',
+            source: 'app',
+            target: 'anonymousCallback@3'
+          }),
+          expect.objectContaining({
+            type: 'handles',
+            source: 'app',
+            target: 'anonymousCallback@4'
+          })
+        ])
+      );
+    });
   });
 });

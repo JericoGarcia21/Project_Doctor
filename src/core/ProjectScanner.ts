@@ -384,9 +384,9 @@ export class ProjectScanner {
       }
     }
 
-    const addSymbol = (filePath: string, name: string, type: NodeType, isExported: boolean): string => {
+    const addSymbol = (filePath: string, name: string, type: NodeType, isExported: boolean, metadata?: Record<string, unknown>): string => {
       const id = `${filePath}#${name}`;
-      graph.addNode(createNode(id, type, name, { filePath }));
+      graph.addNode(createNode(id, type, name, { filePath, metadata }));
       const symbols = symbolsByFile.get(filePath) ?? new Map();
       symbols.set(name, { id, type, isExported });
       symbolsByFile.set(filePath, symbols);
@@ -396,16 +396,60 @@ export class ProjectScanner {
       return id;
     };
 
+    const isServiceLikeName = (name: string): boolean => /(?:Service|Repository|Manager|Provider|Factory|UseCase|Handler)$/.test(name);
+
+    const resolveTargetFromName = (fromFile: string, source: ASTParseResult, name: string): string | undefined => {
+      const normalized = name.replace(/\s*\|\s*/g, '').replace(/Readonly<|>|\[\]/g, '').trim();
+      const simpleName = normalized.split('.').pop() ?? normalized;
+      if (!simpleName) {
+        return undefined;
+      }
+
+      const localTarget = symbolsByFile.get(fromFile)?.get(simpleName);
+      if (localTarget) {
+        return localTarget.id;
+      }
+
+      for (const imported of source.imports) {
+        const binding = imported.bindings.find(item => item.localName === simpleName || item.importedName === simpleName);
+        if (!binding) {
+          continue;
+        }
+
+        const targetFile = resolveModule(fromFile, imported.moduleName);
+        if (targetFile) {
+          return exportedSymbols.get(`${path.resolve(targetFile)}#${binding.importedName}`) ??
+            exportedSymbols.get(`${path.resolve(targetFile)}#${binding.localName}`);
+        }
+      }
+
+      return undefined;
+    };
+
     for (const { file, result } of parsedFiles) {
       const fileNodeId = file.path;
       graph.addNode(createNode(fileNodeId, NodeType.FILE, path.basename(file.path), { filePath: file.path }));
 
+      const componentMetadata = new Map<string, Record<string, unknown>>();
+      for (const component of result.components) {
+        componentMetadata.set(component.name, { props: component.props });
+      }
+
       for (const fn of result.functions) {
-        addSymbol(file.path, fn.name, NodeType.FUNCTION, fn.isExported);
+        const nodeType = isServiceLikeName(fn.name) ? NodeType.SERVICE : /^[A-Z]/.test(fn.name) ? NodeType.COMPONENT : NodeType.FUNCTION;
+        const metadata = componentMetadata.get(fn.name) ?? undefined;
+        addSymbol(file.path, fn.name, nodeType, fn.isExported, metadata ? { ...metadata } : undefined);
       }
 
       for (const cls of result.classes) {
-        addSymbol(file.path, cls.name, NodeType.CLASS, cls.isExported);
+        const isServiceLike = isServiceLikeName(cls.name);
+        const nodeType = isServiceLike ? NodeType.SERVICE : /^[A-Z]/.test(cls.name) ? NodeType.COMPONENT : NodeType.CLASS;
+        const metadata = componentMetadata.get(cls.name) ?? undefined;
+        addSymbol(file.path, cls.name, nodeType, cls.isExported, {
+          ...(metadata ?? {}),
+          dependencies: cls.constructorParameters,
+          implements: cls.implements
+        });
       }
 
       for (const iface of result.interfaces) {
@@ -583,10 +627,160 @@ export class ProjectScanner {
       }
     }
 
+    for (const { file, result } of parsedFiles) {
+      for (const cls of result.classes) {
+        if (!isServiceLikeName(cls.name)) {
+          continue;
+        }
+
+        const serviceId = `${file.path}#${cls.name}`;
+        for (const dependencyType of cls.constructorParameters) {
+          const fallbackTarget = (() => {
+            const normalized = dependencyType.replace(/\s*\|\s*/g, '').replace(/Readonly<|>|\[\]/g, '').trim();
+            const simpleName = normalized.split('.').pop() ?? normalized;
+            if (!simpleName) return undefined;
+
+            for (const fileSymbols of symbolsByFile.values()) {
+              const targetSymbol = fileSymbols.get(simpleName);
+              if (targetSymbol) {
+                return targetSymbol.id;
+              }
+            }
+
+            return undefined;
+          })();
+
+          const targetId = resolveTargetFromName(file.path, result, dependencyType) ??
+            resolveTargetFromName(file.path, result, dependencyType.replace(/\[\]$/, '').split('.').pop() ?? dependencyType) ??
+            fallbackTarget;
+          if (targetId) {
+            graph.addEdge(createEdge(serviceId, targetId, RelationType.USES, {
+              dependencyType,
+              sourceLine: cls.sourceLine
+            }));
+          }
+        }
+      }
+    }
+
     await this.addLaravelRouteRelationships(rootPath, files, graph);
+    await this.addLaravelControllerMiddlewareRelationships(rootPath, files, graph);
     await this.addLaravelMiddlewareRelationships(rootPath, files, graph);
     await this.addEloquentModelRelationships(rootPath, files, graph);
+    await this.addRequestFlowRelationships(rootPath, files, graph);
     return graph;
+  }
+
+  private async addLaravelControllerMiddlewareRelationships(rootPath: string, files: FileInfo[], graph: ProjectGraph): Promise<void> {
+    const controllerFiles = files.filter(file => {
+      if (file.extension !== '.php') {
+        return false;
+      }
+      const relativePath = path.relative(rootPath, file.path).split(path.sep).join('/').toLowerCase();
+      return relativePath.startsWith('app/http/controllers/');
+    });
+
+    for (const file of controllerFiles) {
+      try {
+        const content = await fs.readFile(file.path, 'utf-8');
+        const namespaceMatch = content.match(/namespace\s+([^;]+);/s);
+        const classMatch = content.match(/class\s+([A-Za-z_][A-Za-z0-9_]*)/);
+        if (!classMatch) {
+          continue;
+        }
+
+        const className = namespaceMatch
+          ? `${namespaceMatch[1]}\\${classMatch[1]}`
+          : classMatch[1];
+        const controllerId = `php-controller:${className}`;
+        graph.addNode(createNode(controllerId, NodeType.CONTROLLER, classMatch[1], {
+          filePath: file.path,
+          metadata: { className }
+        }));
+
+        for (const call of content.matchAll(/\$this->middleware\s*\(\s*([\s\S]*?)\)/g)) {
+          const middlewareValues = [...call[1].matchAll(/['"]([^'"]+)['"]/g)].map(match => match[1]);
+          for (const middleware of middlewareValues) {
+            const middlewareId = `php-middleware:${middleware}`;
+            graph.addNode(createNode(middlewareId, NodeType.SERVICE, middleware, {
+              metadata: { middleware }
+            }));
+            graph.addEdge(createEdge(controllerId, middlewareId, RelationType.USES, {
+              source: 'controller-middleware'
+            }));
+          }
+        }
+      } catch {
+        console.debug(`[ProjectScanner] Skipping Laravel controller middleware analysis for ${file.path}`);
+      }
+    }
+  }
+
+  private async addRequestFlowRelationships(rootPath: string, files: FileInfo[], graph: ProjectGraph): Promise<void> {
+    const isServiceLikeName = (name: string): boolean => /(?:Service|Repository|Manager|Provider|Factory|UseCase|Handler)$/.test(name);
+    const serviceMap = new Map<string, string>();
+    const sourceFiles = files.filter(file =>
+      file.extension === '.ts' ||
+      file.extension === '.tsx' ||
+      file.extension === '.js' ||
+      file.extension === '.jsx'
+    );
+
+    for (const file of sourceFiles) {
+      try {
+        const content = await fs.readFile(file.path, 'utf-8');
+        const result = await this.tsParser.parseDetailed(content, file.path);
+        for (const cls of result.classes) {
+          if (isServiceLikeName(cls.name)) {
+            serviceMap.set(cls.name, `${file.path}#${cls.name}`);
+          }
+        }
+      } catch {
+        // Skip files that can't be parsed.
+      }
+    }
+
+    const controllerFiles = files.filter(file => {
+      if (file.extension !== '.php') {
+        return false;
+      }
+      const relativePath = path.relative(rootPath, file.path).split(path.sep).join('/').toLowerCase();
+      return relativePath.startsWith('app/http/controllers/');
+    });
+
+    for (const file of controllerFiles) {
+      try {
+        const content = await fs.readFile(file.path, 'utf-8');
+        const namespaceMatch = content.match(/namespace\s+([^;]+);/s);
+        const classMatch = content.match(/class\s+([A-Za-z_][A-Za-z0-9_]*)/);
+        if (!classMatch) {
+          continue;
+        }
+
+        const controllerName = namespaceMatch
+          ? `${namespaceMatch[1]}\\${classMatch[1]}`
+          : classMatch[1];
+        const controllerId = `php-controller:${controllerName}`;
+        const constructorMatch = content.match(/function\s+__construct\s*\(([^)]*)\)/s);
+        const deps = constructorMatch ? [...constructorMatch[1].matchAll(/\??(?:[A-Za-z_\\][A-Za-z0-9_\\]*)\s+\$[A-Za-z_][A-Za-z0-9_]*/g)] : [];
+
+        for (const dep of deps) {
+          const dependencyName = dep[0].trim().split(/\s+/)[0].replace(/^\?/, '').trim();
+          const serviceId = serviceMap.get(dependencyName)
+            ?? serviceMap.get(dependencyName.split('\\').pop() ?? dependencyName)
+            ?? serviceMap.get((dependencyName.split('\\').pop() ?? dependencyName).replace(/Service$/, 'Service'));
+
+          if (serviceId && graph.getNode(controllerId) && graph.getNode(serviceId)) {
+            graph.addEdge(createEdge(controllerId, serviceId, RelationType.USES, {
+              dependencyType: dependencyName,
+              source: 'controller-constructor'
+            }));
+          }
+        }
+      } catch {
+        // Skip files that cannot be inspected.
+      }
+    }
   }
 
   private async addLaravelRouteRelationships(rootPath: string, files: FileInfo[], graph: ProjectGraph): Promise<void> {
@@ -643,7 +837,14 @@ export class ProjectScanner {
           const routeId = `${file.path}#route:${route.method}:${route.uri}:${route.sourceLine}`;
           graph.addNode(createNode(routeId, NodeType.API_ROUTE, `${route.method} ${route.uri}`, {
             filePath: file.path,
-            metadata: { method: route.method, uri: route.uri, sourceLine: route.sourceLine }
+            metadata: {
+              method: route.method,
+              uri: route.uri,
+              name: route.name,
+              controller: route.controller,
+              action: route.action,
+              sourceLine: route.sourceLine
+            }
           }));
 
           if (route.controller) {
@@ -734,6 +935,7 @@ export class ProjectScanner {
               fillable: model.fillable,
               hidden: model.hidden,
               casts: model.casts,
+              events: model.events,
               sourceLine: model.sourceLine
             }
           }));
@@ -744,6 +946,18 @@ export class ProjectScanner {
               metadata: { tableName: model.tableName }
             }));
             graph.addEdge(createEdge(modelId, tableId, RelationType.MAPS_TO, {
+              sourceLine: model.sourceLine
+            }));
+          }
+
+          for (const event of model.events) {
+            const eventId = `${modelId}#event:${event}`;
+            graph.addNode(createNode(eventId, NodeType.FUNCTION, event, {
+              filePath: file.path,
+              metadata: { event, sourceLine: model.sourceLine }
+            }));
+            graph.addEdge(createEdge(modelId, eventId, RelationType.USES, {
+              event,
               sourceLine: model.sourceLine
             }));
           }

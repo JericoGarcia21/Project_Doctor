@@ -35,6 +35,7 @@ export interface ASTClass {
   implements: string[];
   methods: string[];
   properties: string[];
+  constructorParameters: string[];
   sourceLine: number;
 }
 
@@ -54,12 +55,20 @@ export interface ASTRelationship {
   sourceLine: number;
 }
 
+export interface ASTComponent {
+  name: string;
+  isExported: boolean;
+  props: string[];
+  sourceLine: number;
+}
+
 export interface ASTParseResult {
   imports: ASTImport[];
   exports: ASTExport[];
   functions: ASTFunction[];
   classes: ASTClass[];
   interfaces: ASTInterface[];
+  components: ASTComponent[];
   relationships: ASTRelationship[];
   hasJSX: boolean;
   hasTypeScript: boolean;
@@ -76,6 +85,7 @@ export class ASTParser {
       functions: [],
       classes: [],
       interfaces: [],
+      components: [],
       relationships: [],
       hasJSX: false,
       hasTypeScript: filePath.endsWith('.ts') || filePath.endsWith('.tsx')
@@ -311,6 +321,11 @@ export class ASTParser {
       isExported,
       sourceLine
     });
+
+    const props = this.extractComponentProps(node.parameters, sourceFile);
+    if (this.isLikelyComponentName(name) || props.length > 0) {
+      result.components.push({ name, isExported, props, sourceLine });
+    }
   }
 
   private extractVariableFunctions(node: ts.VariableStatement, result: ASTParseResult, sourceFile: ts.SourceFile): void {
@@ -345,6 +360,11 @@ export class ASTParser {
           isExported,
           sourceLine
         });
+
+        const props = this.extractComponentProps(func.parameters, sourceFile);
+        if (this.isLikelyComponentName(name) || props.length > 0) {
+          result.components.push({ name, isExported, props, sourceLine });
+        }
       }
     });
   }
@@ -358,6 +378,11 @@ export class ASTParser {
     const isExported = node.modifiers?.some((mod) => mod.kind === ts.SyntaxKind.ExportKeyword) || false;
     const isAbstract = node.modifiers?.some((mod) => mod.kind === ts.SyntaxKind.AbstractKeyword) || false;
 
+    const props = this.extractClassProps(node, sourceFile);
+    if (this.isLikelyComponentName(name) || props.length > 0) {
+      result.components.push({ name, isExported, props, sourceLine: sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1 });
+    }
+
     const extendsClass = node.heritageClauses?.find(
       (clause) => clause.token === ts.SyntaxKind.ExtendsKeyword
     )?.types[0]?.expression.getText(sourceFile);
@@ -368,6 +393,7 @@ export class ASTParser {
 
     const methods: string[] = [];
     const properties: string[] = [];
+    const constructorParameters: string[] = [];
 
     node.members.forEach((member) => {
       if (ts.isMethodDeclaration(member) && member.name && ts.isIdentifier(member.name)) {
@@ -393,6 +419,15 @@ export class ASTParser {
         });
       } else if (ts.isPropertyDeclaration(member) && member.name && ts.isIdentifier(member.name)) {
         properties.push(member.name.text);
+      } else if (ts.isConstructorDeclaration(member)) {
+        member.parameters.forEach((parameter) => {
+          const typeText = parameter.type?.getText(sourceFile);
+          if (typeText) {
+            constructorParameters.push(typeText);
+          } else if (ts.isIdentifier(parameter.name)) {
+            constructorParameters.push(parameter.name.text);
+          }
+        });
       }
     });
 
@@ -436,6 +471,7 @@ export class ASTParser {
       implements: implementsList,
       methods,
       properties,
+      constructorParameters,
       sourceLine
     });
   }
@@ -480,6 +516,75 @@ export class ASTParser {
     }
     if (ts.isPropertyAccessExpression(expression)) {
       return expression.name.text;
+    }
+    return undefined;
+  }
+
+  private extractComponentProps(parameters: ts.NodeArray<ts.ParameterDeclaration>, sourceFile: ts.SourceFile): string[] {
+    const props: string[] = [];
+
+    parameters.forEach((parameter) => {
+      if (ts.isIdentifier(parameter.name)) {
+        props.push(parameter.name.text);
+        return;
+      }
+
+      if (ts.isObjectBindingPattern(parameter.name)) {
+        parameter.name.elements.forEach((element) => {
+          if (ts.isBindingElement(element)) {
+            if (ts.isIdentifier(element.name)) {
+              props.push(element.name.text);
+            } else if (ts.isObjectBindingPattern(element.name)) {
+              props.push(...this.extractBindingPatternProps(element.name, sourceFile));
+            }
+          }
+        });
+      }
+    });
+
+    return [...new Set(props)];
+  }
+
+  private extractBindingPatternProps(pattern: ts.ObjectBindingPattern, sourceFile: ts.SourceFile): string[] {
+    const props: string[] = [];
+    pattern.elements.forEach((element) => {
+      if (ts.isBindingElement(element)) {
+        if (ts.isIdentifier(element.name)) {
+          props.push(element.name.text);
+        } else if (ts.isObjectBindingPattern(element.name)) {
+          props.push(...this.extractBindingPatternProps(element.name, sourceFile));
+        }
+      }
+    });
+    return props;
+  }
+
+  private extractClassProps(node: ts.ClassDeclaration, sourceFile: ts.SourceFile): string[] {
+    const props: string[] = [];
+    node.members.forEach((member) => {
+      if (ts.isConstructorDeclaration(member)) {
+        member.parameters.forEach((parameter) => {
+          if (ts.isIdentifier(parameter.name)) {
+            props.push(parameter.name.text);
+          } else if (ts.isObjectBindingPattern(parameter.name)) {
+            props.push(...this.extractBindingPatternProps(parameter.name, sourceFile));
+          }
+        });
+      }
+    });
+    return [...new Set(props)];
+  }
+
+  private isLikelyComponentName(name: string): boolean {
+    return !!name && /^[A-Z]/.test(name);
+  }
+
+  private getJsxTagName(tagName: ts.JsxTagNameExpression): string | undefined {
+    if (ts.isIdentifier(tagName)) {
+      return tagName.text;
+    }
+    if (ts.isPropertyAccessExpression(tagName)) {
+      return tagName.name.text;
     }
     return undefined;
   }
@@ -534,14 +639,36 @@ export class ASTParser {
                     : undefined;
                 if (callbackName) {
                   this.addRelationship(result, 'callback', currentFunctionName!, callbackName, sourceFile.getLineAndCharacterOfPosition(argument.getStart()).line + 1);
+                } else if (ts.isArrowFunction(argument) || ts.isFunctionExpression(argument)) {
+                  const anonymousName = this.registerAnonymousFunction(argument, result, sourceFile);
+                  this.addRelationship(result, 'callback', currentFunctionName!, anonymousName, sourceFile.getLineAndCharacterOfPosition(argument.getStart()).line + 1);
                 }
               }
             }
 
             if (ts.isJsxAttribute(callNode) && callNode.name && ts.isIdentifier(callNode.name) && callNode.name.text.startsWith('on')) {
               const initializer = callNode.initializer;
-              if (initializer && ts.isJsxExpression(initializer) && initializer.expression && ts.isIdentifier(initializer.expression)) {
-                this.addRelationship(result, 'handles', currentFunctionName!, initializer.expression.text, sourceFile.getLineAndCharacterOfPosition(callNode.getStart()).line + 1);
+              if (initializer && ts.isJsxExpression(initializer) && initializer.expression) {
+                const handlerName = ts.isIdentifier(initializer.expression)
+                  ? initializer.expression.text
+                  : ts.isArrowFunction(initializer.expression) || ts.isFunctionExpression(initializer.expression)
+                    ? this.registerAnonymousFunction(initializer.expression, result, sourceFile)
+                    : undefined;
+                if (handlerName) {
+                  this.addRelationship(result, 'handles', currentFunctionName!, handlerName, sourceFile.getLineAndCharacterOfPosition(callNode.getStart()).line + 1);
+                }
+              }
+            }
+
+            if (ts.isJsxSelfClosingElement(callNode) || ts.isJsxElement(callNode) || ts.isJsxOpeningElement(callNode)) {
+              const tagName = ts.isJsxSelfClosingElement(callNode)
+                ? this.getJsxTagName(callNode.tagName)
+                : ts.isJsxElement(callNode)
+                  ? this.getJsxTagName(callNode.openingElement.tagName)
+                  : this.getJsxTagName(callNode.tagName);
+
+              if (tagName && this.isLikelyComponentName(tagName) && currentFunctionName) {
+                this.addRelationship(result, 'uses', currentFunctionName, tagName, sourceFile.getLineAndCharacterOfPosition(callNode.getStart()).line + 1);
               }
             }
 
@@ -556,6 +683,26 @@ export class ASTParser {
     };
 
     visitFunctionBody(sourceFile);
+  }
+
+  private registerAnonymousFunction(
+    node: ts.ArrowFunction | ts.FunctionExpression,
+    result: ASTParseResult,
+    sourceFile: ts.SourceFile
+  ): string {
+    const sourceLine = sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1;
+    const name = `anonymousCallback@${sourceLine}`;
+    if (!result.functions.some(fn => fn.name === name)) {
+      result.functions.push({
+        name,
+        parameters: node.parameters.map(parameter => ts.isIdentifier(parameter.name) ? parameter.name.text : 'unknown'),
+        returnType: node.type?.getText(sourceFile),
+        isAsync: node.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword) || false,
+        isExported: false,
+        sourceLine
+      });
+    }
+    return name;
   }
 
   private addRelationship(result: ASTParseResult, type: ASTRelationship['type'], source: string, target: string, sourceLine: number): void {

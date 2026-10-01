@@ -6,7 +6,16 @@ export interface LaravelRoute {
   uri: string;
   controller?: string;
   action?: string;
+  name?: string;
   sourceLine: number;
+}
+
+export interface BladeTemplateReference {
+  type: 'layout' | 'include' | 'component';
+  name: string;
+  sourceLine: number;
+  filePath: string;
+  variables?: Record<string, string>;
 }
 
 export interface PHPControllerAction {
@@ -33,6 +42,7 @@ export interface EloquentModel {
   fillable: string[];
   hidden: string[];
   casts: Record<string, string>;
+  events: string[];
   sourceLine: number;
   filePath: string;
 }
@@ -56,6 +66,8 @@ interface PHPNode {
 interface LaravelRouteContext {
   prefix?: string;
   controller?: string;
+  namespace?: string;
+  namePrefix?: string;
 }
 
 export class PHPParser extends BaseParser {
@@ -109,6 +121,7 @@ export class PHPParser extends BaseParser {
     const ast = this.engine.parseCode(content, filePath) as unknown as PHPNode;
     const routes: LaravelRoute[] = [];
     const controllerAliases = new Map<string, string>();
+    const seenRoutes = new Map<string, LaravelRoute>();
     const collectAliases = (node: unknown): void => {
       if (!node || typeof node !== 'object') {
         return;
@@ -152,7 +165,9 @@ export class PHPParser extends BaseParser {
         const localContext = this.groupContext(current, controllerAliases);
         const nestedContext: LaravelRouteContext = {
           prefix: this.joinPrefix(context.prefix, localContext.prefix),
-          controller: localContext.controller ?? context.controller
+          controller: localContext.controller ?? context.controller,
+          namespace: localContext.namespace ?? context.namespace,
+          namePrefix: this.joinRouteName(context.namePrefix, localContext.namePrefix)
         };
         if (Array.isArray(current.arguments)) {
           current.arguments.forEach(argument => visit(argument, nestedContext));
@@ -160,10 +175,27 @@ export class PHPParser extends BaseParser {
         return;
       }
 
-      const route = this.extractRoute(current, controllerAliases, context.controller);
+      const route = this.extractRoute(current, controllerAliases, context);
       if (route) {
         route.uri = this.joinPrefix(context.prefix, route.uri) ?? route.uri;
-        routes.push(route);
+        route.name = this.joinRouteName(context.namePrefix, route.name);
+
+        const routeKey = `${route.method}:${route.uri}:${route.sourceLine}`;
+        const existingRoute = seenRoutes.get(routeKey);
+        if (existingRoute) {
+          if (!existingRoute.name && route.name) {
+            existingRoute.name = route.name;
+          }
+          if (!existingRoute.controller && route.controller) {
+            existingRoute.controller = route.controller;
+          }
+          if (!existingRoute.action && route.action) {
+            existingRoute.action = route.action;
+          }
+        } else {
+          seenRoutes.set(routeKey, route);
+          routes.push(route);
+        }
       }
       for (const [key, value] of Object.entries(current)) {
         if (key === 'loc') {
@@ -178,6 +210,96 @@ export class PHPParser extends BaseParser {
     };
     visit(ast);
     return routes;
+  }
+
+  parseBladeTemplate(content: string, filePath: string): BladeTemplateReference[] {
+    const references: BladeTemplateReference[] = [];
+    const lines = content.split(/\r?\n/);
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      const lineNumber = index + 1;
+
+      const includeMatch = line.match(/@(?:include(?:If|When|Unless)?|includeFirst)\s*\(\s*['\"]([^'\"]+)['\"](?:\s*,\s*(\[[^\]]*\]))?\s*\)/);
+      if (includeMatch) {
+        references.push({
+          type: 'include',
+          name: includeMatch[1].replace(/^['"]|['"]$/g, ''),
+          sourceLine: lineNumber,
+          filePath,
+          variables: this.parseBladeVariableMap(includeMatch[2])
+        });
+      }
+
+      const layoutMatch = line.match(/@extends\s*\(\s*['\"]([^'\"]+)['\"]\s*\)/);
+      if (layoutMatch) {
+        references.push({
+          type: 'layout',
+          name: layoutMatch[1],
+          sourceLine: lineNumber,
+          filePath
+        });
+      }
+
+      const componentMatch = line.match(/@component\s*\(\s*['\"]([^'\"]+)['\"](?:\s*,\s*(\[[^\]]*\]))?\s*\)/);
+      if (componentMatch) {
+        references.push({
+          type: 'component',
+          name: componentMatch[1],
+          sourceLine: lineNumber,
+          filePath,
+          variables: this.parseBladeVariableMap(componentMatch[2])
+        });
+      }
+
+      const tagMatch = line.match(/<x-([a-z0-9.-]+)(?:\s+[^>]*?)?>/i);
+      if (tagMatch) {
+        references.push({
+          type: 'component',
+          name: tagMatch[1],
+          sourceLine: lineNumber,
+          filePath,
+          variables: this.parseBladeTagAttributes(line)
+        });
+      }
+    }
+
+    return references;
+  }
+
+  private parseBladeVariableMap(value?: string): Record<string, string> | undefined {
+    if (!value) {
+      return undefined;
+    }
+
+    const variables: Record<string, string> = {};
+    const entries = value.matchAll(/['\"]([^'\"]+)['\"]\s*=>\s*([^,\]]+)/g);
+
+    for (const match of entries) {
+      const key = match[1];
+      const rawValue = match[2].trim();
+      if (key && rawValue) {
+        variables[key] = rawValue.replace(/^['"]|['"]$/g, '');
+      }
+    }
+
+    return Object.keys(variables).length > 0 ? variables : undefined;
+  }
+
+  private parseBladeTagAttributes(line: string): Record<string, string> | undefined {
+    const attrs: Record<string, string> = {};
+    const regex = /([a-zA-Z0-9:_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|\$\(([^\)]*)\)|([^\s>]+))/g;
+    let match: RegExpExecArray | null;
+
+    while ((match = regex.exec(line)) !== null) {
+      const key = match[1];
+      const value = match[2] ?? match[3] ?? match[4] ?? match[5] ?? '';
+      if (key && value) {
+        attrs[key] = value;
+      }
+    }
+
+    return Object.keys(attrs).length > 0 ? attrs : undefined;
   }
 
   parseControllerActions(content: string, filePath: string): PHPControllerAction[] {
@@ -285,7 +407,10 @@ export class PHPParser extends BaseParser {
         return;
       }
 
-      const route = this.extractRoute(current, controllerAliases, context.controller);
+      const route = this.extractRoute(current, controllerAliases, {
+        prefix: context.prefix,
+        controller: context.controller
+      });
       if (route) {
         const routeMiddleware = this.extractMiddlewareFromRoute(current);
         const allMiddleware = [...context.middleware, ...routeMiddleware];
@@ -325,12 +450,20 @@ export class PHPParser extends BaseParser {
         const className = this.classNodeName(current.name);
         if (className && this.isEloquentModel(current)) {
           const model = this.extractEloquentModel(current, className, currentNamespace, filePath);
-          if (model) models.push(model);
+          if (model) {
+            const source = contentForEvents;
+            model.events = [...new Set([
+              ...model.events,
+              ...[...source.matchAll(/(?:static|self|[A-Za-z_][A-Za-z0-9_]*)::(creating|created|updating|updated|deleting|deleted|saving|saved)\s*\(/g)].map(match => match[1])
+            ])];
+            models.push(model);
+          }
         }
       }
 
       this.traverseNode(current, (child) => visit(child, currentNamespace));
     };
+    const contentForEvents = content;
     visit(ast);
     return models;
   }
@@ -437,6 +570,7 @@ export class PHPParser extends BaseParser {
     const fillable: string[] = [];
     const hidden: string[] = [];
     const casts: Record<string, string> = {};
+    const events: string[] = [];
     let tableName: string | undefined;
     const sourceLine = this.sourceLine(classNode);
 
@@ -544,6 +678,7 @@ export class PHPParser extends BaseParser {
       fillable,
       hidden,
       casts,
+      events,
       sourceLine,
       filePath
     };
@@ -666,11 +801,17 @@ export class PHPParser extends BaseParser {
     return undefined;
   }
 
-  private extractRoute(call: PHPNode, controllerAliases: Map<string, string>, groupController?: string): LaravelRoute | undefined {
+  private extractRoute(call: PHPNode, controllerAliases: Map<string, string>, context: LaravelRouteContext = {}): LaravelRoute | undefined {
     if (call.kind !== 'call') {
       return undefined;
     }
-    const lookup = this.asNode(call.what);
+
+    const resolvedCall = this.resolveRouteCall(call);
+    if (!resolvedCall) {
+      return undefined;
+    }
+
+    const lookup = this.asNode(resolvedCall.what);
     if (lookup?.kind !== 'staticlookup') {
       return undefined;
     }
@@ -680,7 +821,7 @@ export class PHPParser extends BaseParser {
       return undefined;
     }
 
-    const argumentsList = Array.isArray(call.arguments) ? call.arguments : [];
+    const argumentsList = Array.isArray(resolvedCall.arguments) ? resolvedCall.arguments : [];
     const upperMethod = method.toUpperCase();
     let uriArgument: unknown;
     let actionArgument: unknown;
@@ -704,10 +845,10 @@ export class PHPParser extends BaseParser {
 
     const controllerAction = ['RESOURCE', 'APIRESOURCE'].includes(upperMethod)
       ? (() => {
-        const controller = this.className(this.asNode(actionArgument), controllerAliases);
+        const controller = this.resolveControllerName(this.className(this.asNode(actionArgument), controllerAliases), context.namespace, controllerAliases);
         return controller ? { controller, action: 'resource' } : undefined;
       })()
-      : this.extractControllerAction(actionArgument, controllerAliases, groupController);
+      : this.extractControllerAction(actionArgument, controllerAliases, context.controller, context.namespace);
     const line = this.asNode(call.loc)?.start;
     const sourceLine = typeof line === 'object' && line !== null && typeof (line as PHPNode).line === 'number'
       ? (line as PHPNode).line as number
@@ -718,11 +859,44 @@ export class PHPParser extends BaseParser {
       uri,
       controller: controllerAction?.controller,
       action: controllerAction?.action,
+      name: this.extractRouteName(call),
       sourceLine
     };
   }
 
-  private extractControllerAction(value: unknown, controllerAliases: Map<string, string>, groupController?: string): { controller: string; action: string } | undefined {
+  private resolveRouteCall(call: PHPNode): PHPNode | undefined {
+    let current: PHPNode | undefined = call;
+
+    while (current?.kind === 'call') {
+      const lookup = this.asNode(current.what);
+      if (lookup?.kind === 'staticlookup') {
+        const facade = this.asNode(lookup.what);
+        const method = this.asNode(lookup.offset)?.name;
+        if (typeof facade?.name === 'string' && facade.name.split('\\').pop() === 'Route' && typeof method === 'string') {
+          return current;
+        }
+      }
+
+      if (lookup?.kind === 'propertylookup') {
+        const inner = this.asNode(lookup.what);
+        if (inner?.kind === 'call') {
+          current = inner;
+          continue;
+        }
+      }
+
+      if (lookup && lookup.kind === 'call') {
+        current = lookup;
+        continue;
+      }
+
+      break;
+    }
+
+    return undefined;
+  }
+
+  private extractControllerAction(value: unknown, controllerAliases: Map<string, string>, groupController?: string, groupNamespace?: string): { controller: string; action: string } | undefined {
     const node = this.asNode(value);
     if (!node) {
       return undefined;
@@ -734,7 +908,7 @@ export class PHPParser extends BaseParser {
         return entry?.kind === 'entry' ? entry.value : item;
       });
       const classReference = this.asNode(entries[0]);
-      const className = this.className(classReference, controllerAliases);
+      const className = this.resolveControllerName(this.className(classReference, controllerAliases), groupNamespace, controllerAliases);
       const action = this.stringValue(entries[1]);
       return className && action ? { controller: className, action } : undefined;
     }
@@ -743,13 +917,25 @@ export class PHPParser extends BaseParser {
     if (callable) {
       const separator = callable.lastIndexOf('@');
       if (separator > 0 && separator < callable.length - 1) {
-        return {
-          controller: controllerAliases.get(callable.slice(0, separator)) ?? callable.slice(0, separator).replace(/^\\/, ''),
+        const controllerName = this.resolveControllerName(callable.slice(0, separator), groupNamespace, controllerAliases);
+        return controllerName ? {
+          controller: controllerName,
           action: callable.slice(separator + 1)
-        };
+        } : undefined;
       }
-      if (groupController) {
-        return { controller: groupController, action: callable };
+      if (groupController || groupNamespace) {
+        const isActionName = !/[\\/]/.test(callable) && !callable.includes('::') && !/Controller$/i.test(callable);
+        if (isActionName) {
+          const controllerName = this.resolveControllerName(groupController, groupNamespace, controllerAliases);
+          if (controllerName) {
+            return { controller: controllerName, action: callable };
+          }
+        }
+
+        const controllerName = this.resolveControllerName(callable, groupNamespace, controllerAliases) ?? groupController;
+        if (controllerName && controllerName !== callable && !/Controller$/i.test(callable)) {
+          return { controller: controllerName, action: 'index' };
+        }
       }
     }
     return undefined;
@@ -778,16 +964,31 @@ export class PHPParser extends BaseParser {
         context.prefix = this.joinPrefix(context.prefix, this.stringValue(call.arguments[0]));
       } else if (call.method === 'controller') {
         context.controller = this.className(this.asNode(call.arguments[0]), controllerAliases);
+      } else if (call.method === 'namespace') {
+        context.namespace = this.stringValue(call.arguments[0]);
+      } else if (call.method === 'as' || call.method === 'name') {
+        const name = this.stringValue(call.arguments[0]);
+        if (name) {
+          context.namePrefix = this.joinRouteName(context.namePrefix, name);
+        }
       } else if (call.method === 'group') {
         const options = this.asNode(call.arguments[0]);
         if (options?.kind === 'array' && Array.isArray(options.items)) {
           for (const item of options.items) {
             const entry = this.asNode(item);
             const key = this.stringValue(entry?.key);
+            const value = entry?.value;
             if (key === 'prefix') {
-              context.prefix = this.joinPrefix(context.prefix, this.stringValue(entry?.value));
+              context.prefix = this.joinPrefix(context.prefix, this.stringValue(value));
             } else if (key === 'controller') {
-              context.controller = this.className(this.asNode(entry?.value), controllerAliases);
+              context.controller = this.className(this.asNode(value), controllerAliases);
+            } else if (key === 'namespace') {
+              context.namespace = this.stringValue(value);
+            } else if (key === 'as' || key === 'name') {
+              const routeName = this.stringValue(value);
+              if (routeName) {
+                context.namePrefix = this.joinRouteName(context.namePrefix, routeName);
+              }
             }
           }
         }
@@ -796,12 +997,68 @@ export class PHPParser extends BaseParser {
     return context;
   }
 
+  private joinRouteName(prefix: string | undefined, child: string | undefined): string | undefined {
+    if (!prefix && !child) {
+      return undefined;
+    }
+    const normalizedPrefix = prefix?.replace(/\/+$/, '') ?? '';
+    const normalizedChild = child?.replace(/^\/+/, '') ?? '';
+    if (!normalizedPrefix) {
+      return normalizedChild;
+    }
+    if (!normalizedChild) {
+      return normalizedPrefix;
+    }
+    return `${normalizedPrefix}.${normalizedChild}`.replace(/\.\./g, '.');
+  }
+
+  private extractRouteName(call: PHPNode): string | undefined {
+    const chain: { method: string; arguments: unknown[] }[] = [];
+    let current: PHPNode | undefined = call;
+    while (current?.kind === 'call') {
+      const lookup = this.asNode(current.what);
+      const method = this.callMethod(current);
+      if (method) {
+        chain.push({ method: method.toLowerCase(), arguments: Array.isArray(current.arguments) ? current.arguments : [] });
+      }
+      current = this.asNode(lookup?.what);
+    }
+
+    for (const item of chain.reverse()) {
+      if ((item.method === 'name' || item.method === 'as') && item.arguments[0]) {
+        const routeName = this.stringValue(item.arguments[0]);
+        if (routeName) {
+          return routeName;
+        }
+      }
+    }
+    return undefined;
+  }
+
   private joinPrefix(parent: string | undefined, child: string | undefined): string | undefined {
     const segments = [parent, child]
       .filter((segment): segment is string => Boolean(segment))
       .map(segment => segment.replace(/^\/+|\/+$/g, ''))
       .filter(Boolean);
     return segments.length > 0 ? `/${segments.join('/')}` : undefined;
+  }
+
+  private resolveControllerName(controller: string | undefined, groupNamespace?: string, controllerAliases: Map<string, string> = new Map()): string | undefined {
+    if (!controller) {
+      return groupNamespace ? groupNamespace.replace(/\\$/, '') : undefined;
+    }
+
+    const normalized = controller.replace(/^\\/, '');
+    if (normalized.includes('\\') || normalized.includes('/')) {
+      return controllerAliases.get(normalized) ?? normalized.replace(/^\\/, '');
+    }
+
+    if (groupNamespace) {
+      const namespaced = `${groupNamespace.replace(/\\$/, '')}\\${normalized}`;
+      return controllerAliases.get(namespaced) ?? namespaced;
+    }
+
+    return controllerAliases.get(normalized) ?? normalized;
   }
 
   private className(node: PHPNode | undefined, controllerAliases: Map<string, string>): string | undefined {

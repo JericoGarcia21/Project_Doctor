@@ -114,6 +114,104 @@ describe('ProjectScanner relationship analysis', () => {
       .toContain(`${sourcePath}#Contract`);
   });
 
+  it('maps JSX component composition and props', async () => {
+    projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'project-doctor-'));
+    const componentPath = path.join(projectPath, 'ui.tsx');
+    await fs.writeFile(componentPath, [
+      'export function Button({ label }: { label: string }) {',
+      '  return <button>{label}</button>;',
+      '}',
+      '',
+      'export function Card() {',
+      '  return <Button label="Submit" />;',
+      '}'
+    ].join('\n'));
+
+    const result = await new ProjectScanner().scan(projectPath);
+    const cardId = `${componentPath}#Card`;
+    const buttonId = `${componentPath}#Button`;
+
+    expect(result.relationshipGraph.getRelationships(cardId, RelationType.USES).map(edge => edge.target)).toContain(buttonId);
+    expect(result.relationshipGraph.getNode(buttonId)?.type).toBe(NodeType.COMPONENT);
+    expect(result.relationshipGraph.getNode(buttonId)?.metadata?.props).toEqual(['label']);
+  });
+
+  it('maps service classes to injected repositories and collaborators', async () => {
+    projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'project-doctor-'));
+    const repositoryPath = path.join(projectPath, 'repository.ts');
+    const servicePath = path.join(projectPath, 'service.ts');
+
+    await fs.writeFile(repositoryPath, [
+      'export class UserRepository {}',
+      'export class AuditLogger {}'
+    ].join('\n'));
+    await fs.writeFile(servicePath, [
+      "import { UserRepository, AuditLogger } from './repository';",
+      'export class UserService {',
+      '  constructor(private repository: UserRepository, private logger: AuditLogger) {}',
+      '  get() { return this.repository; }',
+      '}'
+    ].join('\n'));
+
+    const result = await new ProjectScanner().scan(projectPath);
+    const serviceId = `${servicePath}#UserService`;
+    const repositoryId = `${repositoryPath}#UserRepository`;
+    const loggerId = `${repositoryPath}#AuditLogger`;
+
+    expect(result.relationshipGraph.getNode(serviceId)?.type).toBe(NodeType.SERVICE);
+    expect(result.relationshipGraph.getRelationships(serviceId, RelationType.USES).map(edge => edge.target)).toEqual(
+      expect.arrayContaining([repositoryId, loggerId])
+    );
+  });
+
+  it('maps Laravel request flow from routes to controller and service dependencies', async () => {
+    projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'project-doctor-'));
+    const routesDirectory = path.join(projectPath, 'routes');
+    const controllerDirectory = path.join(projectPath, 'app', 'Http', 'Controllers');
+    const serviceDirectory = path.join(projectPath, 'app', 'Services');
+    const repositoryDirectory = path.join(projectPath, 'app', 'Repositories');
+    await fs.mkdir(routesDirectory, { recursive: true });
+    await fs.mkdir(controllerDirectory, { recursive: true });
+    await fs.mkdir(serviceDirectory, { recursive: true });
+    await fs.mkdir(repositoryDirectory, { recursive: true });
+
+    const routesPath = path.join(routesDirectory, 'web.php');
+    const controllerPath = path.join(controllerDirectory, 'UserController.php');
+    const servicePath = path.join(serviceDirectory, 'UserService.ts');
+    const repositoryPath = path.join(repositoryDirectory, 'UserRepository.ts');
+
+    await fs.writeFile(routesPath, [
+      '<?php',
+      'use App\\Http\\Controllers\\UserController;',
+      "Route::get('/users', [UserController::class, 'index']);"
+    ].join('\n'));
+    await fs.writeFile(controllerPath, [
+      '<?php',
+      'namespace App\\Http\\Controllers;',
+      'class UserController {',
+      '  public function __construct(private UserService $service) {}',
+      '  public function index() { return $this->service->list(); }',
+      '}'
+    ].join('\n'));
+    await fs.writeFile(servicePath, [
+      'export class UserService {',
+      '  constructor(private repository: UserRepository) {}',
+      '  list() { return this.repository; }',
+      '}'
+    ].join('\n'));
+    await fs.writeFile(repositoryPath, 'export class UserRepository {}');
+
+    const result = await new ProjectScanner().scan(projectPath);
+    const routeId = `${routesPath}#route:GET:/users:3`;
+    const controllerId = 'php-controller:App\\Http\\Controllers\\UserController';
+    const serviceId = `${servicePath}#UserService`;
+    const repositoryId = `${repositoryPath}#UserRepository`;
+
+    expect(result.relationshipGraph.getRelationships(routeId, RelationType.MAPS_TO)[0].target).toBe(controllerId);
+    expect(result.relationshipGraph.getRelationships(controllerId, RelationType.USES).map(edge => edge.target)).toContain(serviceId);
+    expect(result.relationshipGraph.getRelationships(serviceId, RelationType.USES).map(edge => edge.target)).toContain(repositoryId);
+  });
+
   it('maps Laravel web routes to controller actions', async () => {
     projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'project-doctor-'));
     const routesDirectory = path.join(projectPath, 'routes');
@@ -175,6 +273,38 @@ describe('ProjectScanner relationship analysis', () => {
     expect(result.relationshipGraph.getNode(`${controllerId}#action:helper`)).toBeUndefined();
   });
 
+  it('stores Laravel route names and namespaced controller metadata', async () => {
+    projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'project-doctor-'));
+    const routesDirectory = path.join(projectPath, 'routes');
+    const controllerDirectory = path.join(projectPath, 'app', 'Http', 'Controllers');
+    await fs.mkdir(routesDirectory);
+    await fs.mkdir(controllerDirectory, { recursive: true });
+    const routesPath = path.join(routesDirectory, 'web.php');
+    const controllerPath = path.join(controllerDirectory, 'AdminUserController.php');
+
+    await fs.writeFile(routesPath, [
+      '<?php',
+      "Route::name('admin.')->namespace('App\\Http\\Controllers\\Admin')->group(function () {",
+      "  Route::get('/dashboard', 'UserController@index')->name('dashboard');",
+      '});'
+    ].join('\n'));
+    await fs.writeFile(controllerPath, [
+      '<?php',
+      'namespace App\\Http\\Controllers\\Admin;',
+      'class UserController {',
+      '  public function index() {}',
+      '}'
+    ].join('\n'));
+
+    const result = await new ProjectScanner().scan(projectPath);
+    const routeId = `${routesPath}#route:GET:/dashboard:3`;
+    const routeNode = result.relationshipGraph.getNode(routeId);
+
+    expect(routeNode?.metadata?.name).toBe('admin.dashboard');
+    expect(routeNode?.metadata?.controller).toBe('App\\Http\\Controllers\\Admin\\UserController');
+    expect(routeNode?.metadata?.action).toBe('index');
+  });
+
   it('applies route group prefixes and controller defaults', async () => {
     projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'project-doctor-'));
     const routesDirectory = path.join(projectPath, 'routes');
@@ -207,5 +337,66 @@ describe('ProjectScanner relationship analysis', () => {
     expect(optionMappings).toHaveLength(1);
     expect(optionMappings[0].target).toBe('php-controller:UserController');
     expect(optionMappings[0].metadata?.action).toBe('store');
+  });
+
+  it('maps middleware declared by Laravel controllers', async () => {
+    projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'project-doctor-'));
+    const controllerDirectory = path.join(projectPath, 'app', 'Http', 'Controllers');
+    await fs.mkdir(controllerDirectory, { recursive: true });
+    const controllerPath = path.join(controllerDirectory, 'UserController.php');
+
+    await fs.writeFile(controllerPath, [
+      '<?php',
+      'namespace App\\Http\\Controllers;',
+      'class UserController {',
+      '  public function __construct() {',
+      "    $this->middleware('auth');",
+      "    $this->middleware(['verified', 'throttle:60,1']);",
+      '  }',
+      '  public function index() {}',
+      '}'
+    ].join('\n'));
+
+    const result = await new ProjectScanner().scan(projectPath);
+    const controllerId = 'php-controller:App\\Http\\Controllers\\UserController';
+    const middlewareEdges = result.relationshipGraph.getRelationships(controllerId, RelationType.USES);
+
+    expect(middlewareEdges.map(edge => edge.target)).toEqual(
+      expect.arrayContaining([
+        'php-middleware:auth',
+        'php-middleware:verified',
+        'php-middleware:throttle:60,1'
+      ])
+    );
+  });
+
+  it('maps Eloquent model lifecycle events', async () => {
+    projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'project-doctor-'));
+    const modelDirectory = path.join(projectPath, 'app', 'Models');
+    await fs.mkdir(modelDirectory, { recursive: true });
+    const modelPath = path.join(modelDirectory, 'User.php');
+
+    await fs.writeFile(modelPath, [
+      '<?php',
+      'namespace App\\Models;',
+      'use Illuminate\\Database\\Eloquent\\Model;',
+      'class User extends Model {',
+      '  protected static function booted() {',
+      "    static::creating(function ($user) {});",
+      "    static::updated(function ($user) {});",
+      '  }',
+      '}'
+    ].join('\n'));
+
+    const result = await new ProjectScanner().scan(projectPath);
+    const modelId = 'php-model:App\\Models\\User';
+    const eventEdges = result.relationshipGraph.getRelationships(modelId, RelationType.USES);
+
+    expect(eventEdges.map(edge => edge.target)).toEqual(
+      expect.arrayContaining([
+        `${modelId}#event:creating`,
+        `${modelId}#event:updated`
+      ])
+    );
   });
 });
